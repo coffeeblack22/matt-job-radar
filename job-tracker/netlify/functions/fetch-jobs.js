@@ -1,6 +1,5 @@
 // netlify/functions/fetch-jobs.js
-// Scheduled function — scrapes LinkedIn + Adzuna, scores, deduplicates,
-// strips marketing fluff from descriptions
+// v2 — hard filtering by location/company, match scoring, fluff stripping
 
 import { schedule } from "@netlify/functions";
 
@@ -27,7 +26,29 @@ const KEYWORDS_NEGATIVE = [
   "trainee program", "career changer"
 ];
 
-// === Patterns that signal company boilerplate (skip these) ===
+// === HARD FILTERS ===
+const BLOCKED_COMPANIES = [
+  "equitable advisors", "northwestern mutual", "new york life insurance"
+];
+const VALID_NY_LOCATION = /\b(new york|nyc|brooklyn|manhattan|queens|bronx|staten island|long island|westchester|yonkers|white plains|garden city|hempstead|mineola)\b/i;
+const REMOTE_LOCATION = /\bremote\b/i;
+const NON_NY_STATES = /,\s*(CA|TX|FL|IL|MA|GA|NJ|PA|CT|VA|WA|OR|NC|OH|MI|MN|CO|AZ|UT|TN|MO|MD|IN|WI|NV|KY|LA|OK|AR|NE|IA|KS|AL|SC|MS|WV|HI|AK|ID|MT|NM|ND|SD|VT|NH|ME|RI|DE|DC)\b/;
+const NON_US_COUNTRIES = /\b(india|singapore|tokyo|japan|thailand|UAE|emirates|mumbai|bangkok|hong kong|china|UK|london|berlin|paris|france|germany|maharashtra|abu dhabi|dubai|sydney|melbourne|toronto|montreal|mexico)\b/i;
+
+function isLocationValid(location) {
+  if (!location) return false;
+  if (NON_US_COUNTRIES.test(location)) return false;
+  if (REMOTE_LOCATION.test(location)) return true;
+  if (NON_NY_STATES.test(location)) return false;
+  return VALID_NY_LOCATION.test(location);
+}
+
+function isCompanyBlocked(company) {
+  const c = (company || "").toLowerCase();
+  return BLOCKED_COMPANIES.some(b => c.includes(b));
+}
+
+// === FLUFF STRIPPING ===
 const FLUFF_PATTERNS = [
   /^[A-Z][\w\s&'.,]+ is (a |one of )?(the )?(leading|largest|premier|top|global|world|world's)/i,
   /^[A-Z][\w\s&'.,]+ is one of/i,
@@ -40,14 +61,24 @@ const FLUFF_PATTERNS = [
   /^[A-Z][\w\s&'.,]+ specializes in/i,
   /^[A-Z][\w\s&'.,]+ provides (comprehensive|world-class|industry-leading)/i,
   /^[A-Z][\w\s&'.,]+ has (been|long|served)/i,
+  /^Job Description:?\s*[A-Z][\w\s&'.,]+ is /i,
 ];
-
-// === Patterns that signal real role description (start here) ===
+const PORTAL_JUNK_PATTERNS = [
+  /To proceed with your application/i,
+  /must be at least \d+ years of age/i,
+  /Acknowledge \(/i,
+  /Apply (now|today|here)/i,
+  /Click (here|the link)/i,
+  /Equal Opportunity Employer/i,
+  /myworkdayjobs\.com/i,
+  /employees are required to meet/i,
+  /posting eligibility requirements/i,
+];
 const ROLE_INDICATORS = [
   /^(As an?|As the) [A-Z]/i,
   /^(In this role|In this position)/i,
   /^You (will|'ll)/i,
-  /^Job Description/i,
+  /^Job Description\b/i,
   /^Responsibilities/i,
   /^The (role|position)/i,
   /^This (role|position)/i,
@@ -59,46 +90,89 @@ const ROLE_INDICATORS = [
   /^Key (responsibilities|duties)/i,
   /^What you('ll| will) do/i,
 ];
-
-function isFluff(sentence) {
-  return FLUFF_PATTERNS.some(rx => rx.test(sentence.trim()));
+function isFluff(s) { return FLUFF_PATTERNS.some(rx => rx.test(s.trim())); }
+function isPortalJunk(s) { return PORTAL_JUNK_PATTERNS.some(rx => rx.test(s.trim())); }
+function isRoleSpecific(s) {
+  const t = s.trim();
+  if (PORTAL_JUNK_PATTERNS.some(rx => rx.test(t))) return false;
+  if (FLUFF_PATTERNS.some(rx => rx.test(t))) return false;
+  return ROLE_INDICATORS.some(rx => rx.test(t));
 }
 
-function isRoleSpecific(sentence) {
-  return ROLE_INDICATORS.some(rx => rx.test(sentence.trim()));
-}
-
-// Strips company boilerplate, returns role-specific section only
 function extractRoleDescription(text, maxLength = 500) {
   if (!text) return "";
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-
-  // First, look for an explicit role indicator
+  let cleaned = text
+    .replace(/https?:\/\/[^\s)]+/g, "")
+    .replace(/\(\s*\)/g, "")
+    .replace(/Acknowledge\s*\(\s*\)/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  const sentences = cleaned.match(/[^.!?]+[.!?]+/g) || [cleaned];
   let roleStartIdx = sentences.findIndex(s => isRoleSpecific(s));
-
-  // If no role indicator, skip leading fluff sentences
   if (roleStartIdx === -1) {
     let i = 0;
-    while (i < sentences.length && isFluff(sentences[i])) {
-      i++;
-    }
+    while (i < sentences.length && (isFluff(sentences[i]) || isPortalJunk(sentences[i]))) i++;
     roleStartIdx = i;
   }
-
-  // All fluff, no role content? Return empty (honest > misleading)
   if (roleStartIdx >= sentences.length) return "";
-
-  let result = sentences.slice(roleStartIdx).join("").trim();
+  const validSentences = sentences.slice(roleStartIdx).filter(s => !isPortalJunk(s) && !isFluff(s));
+  if (validSentences.length === 0) return "";
+  let result = validSentences.join("").trim();
+  const firstSentence = (result.match(/[^.!?]+[.!?]+/) || [result])[0];
+  if (isFluff(firstSentence) || isPortalJunk(firstSentence)) return "";
+  if (result.length < 80) return "";
   if (result.length > maxLength) {
     const truncated = result.slice(0, maxLength);
     const lastPeriod = truncated.lastIndexOf(".");
-    result = lastPeriod > maxLength * 0.6
-      ? truncated.slice(0, lastPeriod + 1)
-      : truncated + "...";
+    result = lastPeriod > maxLength * 0.6 ? truncated.slice(0, lastPeriod + 1) : truncated + "...";
   }
   return result;
 }
 
+// === MATCH SCORE ===
+const SENIOR_TERMS = /\b(senior|sr|associate|specialist|advisor|analyst|manager)\b/i;
+const ENTRY_TERMS = /\b(entry|trainee|intern|junior|jr\.?|assistant)\b/i;
+const NEGATIVE_TERMS = /\b(director|vice president|vp|partner|head of|chief)\b/i;
+
+function calculateMatchScore(job) {
+  const text = `${job.title} ${job.summary || ""}`.toLowerCase();
+  const highHits = KEYWORDS_HIGH.filter(k => text.includes(k)).length;
+  const medHits = KEYWORDS_MED.filter(k => text.includes(k)).length;
+
+  // Hard fail: zero relevant keywords = wrong industry
+  if (highHits === 0 && medHits === 0) {
+    return Math.min(40, 20 + (job.location && VALID_NY_LOCATION.test(job.location) ? 10 : 0));
+  }
+
+  let score = 0;
+  score += Math.min(50, (highHits * 12) + (medHits * 4));
+
+  // Location
+  if (job.location) {
+    if (VALID_NY_LOCATION.test(job.location)) score += 15;
+    else if (REMOTE_LOCATION.test(job.location)) score += 10;
+  }
+
+  // Salary (uses default $70k threshold; client can override)
+  if (job.salary) {
+    const salaryNum = parseInt((job.salary.match(/\$?(\d+)k/i) || [0,0])[1]) * 1000;
+    if (salaryNum >= 70000) score += 15;
+    else if (salaryNum >= 50000) score += 10;
+    else if (salaryNum > 0) score += 5;
+  } else {
+    score += 6;
+  }
+
+  // Experience
+  if (NEGATIVE_TERMS.test(job.title)) score -= 5;
+  else if (ENTRY_TERMS.test(job.title)) score += 5;
+  else if (SENIOR_TERMS.test(job.title)) score += 20;
+  else score += 12;
+
+  return Math.min(99, Math.max(15, score));
+}
+
+// === SCORING ===
 function makeJobId(company, title, location) {
   const seed = `${company}|${title}|${location || ""}`.toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9|]/g, "");
   let hash = 0;
@@ -112,14 +186,14 @@ function makeJobId(company, title, location) {
 function scoreListing(title, description) {
   const text = `${title} ${description || ""}`.toLowerCase();
   if (KEYWORDS_NEGATIVE.some(k => text.includes(k))) {
-    return { fit: "LOW", reason: "Trainee/entry-level role — past your experience level." };
+    return { fit: "LOW", reason: "Trainee/entry-level — past your experience.", matches: [] };
   }
   const high = KEYWORDS_HIGH.filter(k => text.includes(k));
   const med = KEYWORDS_MED.filter(k => text.includes(k));
   if (high.length >= 2) return { fit: "HIGH", reason: `Strong match: ${high.slice(0, 3).join(", ")}.`, matches: high };
   if (high.length === 1) return { fit: "MED", reason: `Partial match: ${high[0]}${med.length ? `, plus ${med.slice(0, 2).join(", ")}` : ""}.`, matches: [...high, ...med] };
   if (med.length >= 2) return { fit: "MED", reason: `Adjacent role: ${med.slice(0, 3).join(", ")}.`, matches: med };
-  return { fit: "LOW", reason: "No strong keyword matches.", matches: [] };
+  return { fit: "LOW", reason: "No strong matches.", matches: [] };
 }
 
 function extractSalary(text) {
@@ -140,59 +214,33 @@ function extractSalary(text) {
 
 function formatAdzunaSalary(min, max) {
   if (!min && !max) return "";
-  const fmt = (n) => {
-    if (n >= 1000) return `$${Math.round(n / 1000)}k`;
-    return `$${Math.round(n)}`;
-  };
+  const fmt = (n) => n >= 1000 ? `$${Math.round(n / 1000)}k` : `$${Math.round(n)}`;
   if (min && max && min !== max) return `${fmt(min)} - ${fmt(max)}`;
   return fmt(min || max);
 }
 
-// Strip HTML tags + decode entities + normalize whitespace
 function cleanRawText(text) {
   if (!text) return "";
-  return text
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&hellip;/g, "...")
-    .replace(/\s+/g, " ")
-    .trim();
+  return text.replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&hellip;/g, "...").replace(/\s+/g, " ").trim();
 }
-
 function decodeHtml(text) {
   if (!text) return "";
-  return text
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'");
+  return text.replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#39;/g, "'");
 }
 
 // === ADZUNA ===
 async function fetchAdzuna(query, location) {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
-  if (!appId || !appKey) {
-    console.warn("Adzuna credentials missing — skipping");
-    return [];
-  }
+  if (!appId || !appKey) return [];
   const cleanLocation = location.split(",")[0].trim();
   const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(query)}&where=${encodeURIComponent(cleanLocation)}&max_days_old=3&sort_by=date`;
   try {
     const res = await fetch(url, { headers: { "Accept": "application/json" } });
-    if (!res.ok) { console.error(`Adzuna ${res.status} for ${query}`); return []; }
+    if (!res.ok) { console.error(`Adzuna ${res.status}`); return []; }
     const data = await res.json();
     return (data.results || []).map(parseAdzunaJob).filter(Boolean);
-  } catch (e) {
-    console.error("Adzuna fetch failed:", e.message);
-    return [];
-  }
+  } catch (e) { console.error("Adzuna failed:", e.message); return []; }
 }
 
 function parseAdzunaJob(j) {
@@ -200,28 +248,19 @@ function parseAdzunaJob(j) {
   const title = decodeHtml(j.title).trim();
   const company = decodeHtml(j.company.display_name).trim();
   const location = j.location?.display_name || "";
-
-  // Two-step: clean raw text, then strip marketing fluff
   const rawText = cleanRawText(j.description);
   const description = extractRoleDescription(rawText, 500);
-
   const salary = formatAdzunaSalary(j.salary_min, j.salary_max) || extractSalary(rawText);
   const id = makeJobId(company, title, location);
-
-  // Score using both title AND raw text (so we don't lose Series 7 mentions buried in fluff)
   const scoring = scoreListing(title, rawText);
-
   return {
     id, title, company, location,
-    summary: description,
-    applyUrl: j.redirect_url,
+    summary: description, applyUrl: j.redirect_url,
     platform: "Adzuna",
     posted: j.created ? formatDate(j.created) : "Recent",
-    fit: scoring.fit,
-    fitReason: scoring.reason,
+    fit: scoring.fit, fitReason: scoring.reason,
     keyMatch: scoring.matches?.slice(0, 4) || [],
-    salary,
-    scrapedAt: new Date().toISOString(),
+    salary, scrapedAt: new Date().toISOString(),
   };
 }
 
@@ -229,16 +268,11 @@ function parseAdzunaJob(j) {
 async function fetchLinkedIn(query, location) {
   const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&f_TPR=r86400&start=0`;
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36", "Accept": "text/html,application/xhtml+xml" }
-    });
-    if (!res.ok) { console.error(`LinkedIn ${res.status} for ${query}`); return []; }
+    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" } });
+    if (!res.ok) { console.error(`LinkedIn ${res.status}`); return []; }
     const html = await res.text();
     return parseLinkedInHTML(html);
-  } catch (e) {
-    console.error("LinkedIn fetch failed:", e.message);
-    return [];
-  }
+  } catch (e) { console.error("LinkedIn failed:", e.message); return []; }
 }
 
 function parseLinkedInHTML(html) {
@@ -263,8 +297,7 @@ function parseLinkedInHTML(html) {
     const scoring = scoreListing(title, "");
     items.push({
       id, title, company, location,
-      summary: "",
-      applyUrl: url,
+      summary: "", applyUrl: url,
       platform: "LinkedIn",
       posted: dateMatch ? formatDate(dateMatch[1]) : "Recent",
       fit: scoring.fit, fitReason: scoring.reason,
@@ -283,9 +316,7 @@ function formatDate(dateStr) {
     if (hoursAgo < 24) return `${hoursAgo}h ago`;
     const days = Math.floor(hoursAgo / 24);
     return `${days}d ago`;
-  } catch {
-    return "Recent";
-  }
+  } catch { return "Recent"; }
 }
 
 function mergeListings(allJobs) {
@@ -315,13 +346,21 @@ const scrapeHandler = async (event, context) => {
       fetchAdzuna(search.query, search.location),
       fetchLinkedIn(search.query, search.location),
     ]);
-    console.log(`"${search.query}" in ${search.location}: ${adzunaJobs.length} Adzuna + ${linkedinJobs.length} LinkedIn`);
     allJobs.push(...adzunaJobs, ...linkedinJobs);
   }
 
-  const unique = mergeListings(allJobs);
+  const beforeFilter = allJobs.length;
 
-  // Re-score after merge using descriptions when available
+  // === HARD FILTER: location + blocked companies ===
+  const filtered = allJobs.filter(j =>
+    !isCompanyBlocked(j.company) && isLocationValid(j.location)
+  );
+  const afterFilter = filtered.length;
+  console.log(`Filtered ${beforeFilter} → ${afterFilter} (removed ${beforeFilter - afterFilter} junk)`);
+
+  const unique = mergeListings(filtered);
+
+  // Re-score with descriptions, then add match score
   for (const job of unique) {
     if (job.summary) {
       const rescore = scoreListing(job.title, job.summary);
@@ -329,14 +368,11 @@ const scrapeHandler = async (event, context) => {
       job.fitReason = rescore.reason;
       job.keyMatch = rescore.matches?.slice(0, 4) || [];
     }
+    job.matchScore = calculateMatchScore(job);
   }
 
-  const fitOrder = { HIGH: 0, MED: 1, LOW: 2 };
-  unique.sort((a, b) => {
-    const fitDiff = fitOrder[a.fit] - fitOrder[b.fit];
-    if (fitDiff !== 0) return fitDiff;
-    return (b.scrapedAt || "").localeCompare(a.scrapedAt || "");
-  });
+  // Sort by match score descending
+  unique.sort((a, b) => b.matchScore - a.matchScore);
 
   console.log(`Returning ${unique.length} unique listings`);
 
@@ -355,8 +391,7 @@ const scrapeHandler = async (event, context) => {
         high: unique.filter(j => j.fit === "HIGH").length,
         med: unique.filter(j => j.fit === "MED").length,
         low: unique.filter(j => j.fit === "LOW").length,
-        withSalary: unique.filter(j => j.salary).length,
-        withDescription: unique.filter(j => j.summary).length,
+        avgMatch: Math.round(unique.reduce((s, j) => s + (j.matchScore || 0), 0) / Math.max(1, unique.length)),
       }
     }),
   };
