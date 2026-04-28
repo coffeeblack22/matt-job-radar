@@ -6,11 +6,9 @@ const FIT = {
   LOW:  { bg: "#1a0a0a", color: "#f87171", border: "#7f1d1d" },
 };
 
-// === LOCAL STORAGE KEYS ===
 const STORAGE = {
-  applied: "matt_jobs_applied_v1",   // { jobId: { dateApplied, ...jobData } }
-  hidden: "matt_jobs_hidden_v1",     // Set of jobIds user explicitly hid
-  notes: "matt_jobs_notes_v1",       // { jobId: noteText }
+  applied: "matt_jobs_applied_v1",
+  hidden: "matt_jobs_hidden_v1",  // now stores full job data, not just true/false
 };
 
 function loadStorage(key, fallback) {
@@ -32,18 +30,17 @@ function FitBadge({ fit }) {
   );
 }
 
-function JobCard({ job, isApplied, onApply, onHide, isHidden }) {
-  const [open, setOpen] = useState(false);
+function JobCard({ job, isApplied, onApply, onHide, onUnhide, isHidden, autoExpandSummary }) {
+  const [open, setOpen] = useState(autoExpandSummary || false);
   const c = FIT[job.fit] || FIT.MED;
 
   return (
     <div style={{
-      background: isApplied ? "#0a0f0a" : "#0b0b0b",
-      border: `1px solid ${isApplied ? "#14532d" : "#1a1a1a"}`,
+      background: isApplied ? "#0a0f0a" : isHidden ? "#0d0a0a" : "#0b0b0b",
+      border: `1px solid ${isApplied ? "#14532d" : isHidden ? "#3a1a1a" : "#1a1a1a"}`,
       borderLeft: `3px solid ${c.border}`,
       borderRadius: 8, marginBottom: 10, overflow: "hidden",
       transition: "all 0.2s",
-      opacity: isHidden ? 0.5 : 1,
     }}>
       <div style={{ padding: "14px 16px", display: "flex", gap: 12, alignItems: "flex-start" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -52,10 +49,15 @@ function JobCard({ job, isApplied, onApply, onHide, isHidden }) {
             <span style={{ color: "#2a2a2a", fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{job.platform}</span>
             <span style={{ color: "#252525", fontSize: 10 }}>{job.posted}</span>
             {isApplied && <span style={{ color: "#4ade80", fontSize: 10, fontWeight: 700 }}>✓ APPLIED</span>}
+            {isHidden && <span style={{ color: "#f87171", fontSize: 10, fontWeight: 700 }}>✗ NOT INTERESTED</span>}
           </div>
           <div style={{ color: "#ebebeb", fontWeight: 600, fontSize: 14, marginBottom: 2, lineHeight: 1.3 }}>{job.title}</div>
           <div style={{ color: "#555", fontSize: 12 }}>{job.company}{job.location ? ` · ${job.location}` : ""}</div>
-          {job.salary && <div style={{ color: c.color, fontSize: 11, marginTop: 3, opacity: 0.8 }}>{job.salary}</div>}
+          {job.salary && (
+            <div style={{ color: c.color, fontSize: 11, marginTop: 4, opacity: 0.9, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
+              💰 {job.salary}
+            </div>
+          )}
           {job.fitReason && (
             <div style={{ color: "#383838", fontSize: 11, marginTop: 5, fontStyle: "italic", lineHeight: 1.5 }}>{job.fitReason}</div>
           )}
@@ -68,25 +70,42 @@ function JobCard({ job, isApplied, onApply, onHide, isHidden }) {
               textDecoration: "none", textAlign: "center", whiteSpace: "nowrap"
             }}>Apply →</a>
           )}
-          <button onClick={() => onApply(job)} style={{
-            background: isApplied ? "#0a2416" : "transparent",
-            border: `1px solid ${isApplied ? "#14532d" : "#1e1e1e"}`,
-            color: isApplied ? "#4ade80" : "#444",
-            borderRadius: 5, padding: "5px 11px", fontSize: 11,
-            cursor: "pointer", whiteSpace: "nowrap"
-          }}>{isApplied ? "Applied ✓" : "Mark Applied"}</button>
-          <button onClick={() => setOpen(v => !v)} style={{
-            background: "transparent", border: "1px solid #181818",
-            color: "#444", borderRadius: 5, padding: "5px 11px",
-            fontSize: 11, cursor: "pointer"
-          }}>{open ? "Less" : "More"}</button>
+          {!isHidden && (
+            <button onClick={() => onApply(job)} style={{
+              background: isApplied ? "#0a2416" : "transparent",
+              border: `1px solid ${isApplied ? "#14532d" : "#1e1e1e"}`,
+              color: isApplied ? "#4ade80" : "#444",
+              borderRadius: 5, padding: "5px 11px", fontSize: 11,
+              cursor: "pointer", whiteSpace: "nowrap"
+            }}>{isApplied ? "Applied ✓" : "Mark Applied"}</button>
+          )}
+          {isHidden ? (
+            <button onClick={() => onUnhide(job)} style={{
+              background: "transparent", border: "1px solid #2a2a2a",
+              color: "#666", borderRadius: 5, padding: "5px 11px",
+              fontSize: 11, cursor: "pointer", whiteSpace: "nowrap"
+            }}>↶ Restore</button>
+          ) : (
+            <button onClick={() => setOpen(v => !v)} style={{
+              background: "transparent", border: "1px solid #181818",
+              color: "#444", borderRadius: 5, padding: "5px 11px",
+              fontSize: 11, cursor: "pointer"
+            }}>{open ? "Less" : "More"}</button>
+          )}
         </div>
       </div>
 
-      {open && (
+      {open && !isHidden && (
         <div style={{ borderTop: "1px solid #111", padding: "14px 16px", background: "#070707" }}>
-          {job.summary && (
-            <p style={{ color: "#999", fontSize: 12, lineHeight: 1.7, marginBottom: 12 }}>{job.summary}</p>
+          {job.summary ? (
+            <div style={{ marginBottom: 12 }}>
+              <div style={{ color: "#2a2a2a", fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 6 }}>Description</div>
+              <p style={{ color: "#aaa", fontSize: 12, lineHeight: 1.7, margin: 0 }}>{job.summary}</p>
+            </div>
+          ) : (
+            <div style={{ color: "#444", fontSize: 11, fontStyle: "italic", marginBottom: 12 }}>
+              No description available — click Apply to view full posting.
+            </div>
           )}
           {job.keyMatch?.length > 0 && (
             <div style={{ marginBottom: 14 }}>
@@ -99,21 +118,22 @@ function JobCard({ job, isApplied, onApply, onHide, isHidden }) {
             </div>
           )}
           <button onClick={() => onHide(job)} style={{
-            background: "transparent", border: "1px solid #2a2a2a",
-            color: "#666", borderRadius: 5, padding: "5px 12px",
+            background: "transparent", border: "1px solid #2a1a1a",
+            color: "#7f3030", borderRadius: 5, padding: "5px 12px",
             fontSize: 11, cursor: "pointer"
-          }}>{isHidden ? "Unhide" : "Not Interested"}</button>
+          }}>Not Interested</button>
         </div>
       )}
     </div>
   );
 }
 
-function AppliedRow({ entry, onUnapply }) {
+function HistoryRow({ entry, onAction, actionLabel, color, dateLabel }) {
   const c = FIT[entry.fit] || FIT.MED;
   return (
     <div style={{
-      background: "#0a0f0a", border: "1px solid #14532d",
+      background: "#0b0b0b",
+      border: `1px solid ${color === "green" ? "#14532d" : "#3a1a1a"}`,
       borderLeft: `3px solid ${c.border}`,
       borderRadius: 7, padding: "12px 14px", marginBottom: 8,
       display: "flex", alignItems: "center", gap: 12
@@ -121,20 +141,25 @@ function AppliedRow({ entry, onUnapply }) {
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 3 }}>
           <FitBadge fit={entry.fit} />
-          <span style={{ color: "#4ade80", fontSize: 10, fontWeight: 700 }}>✓ APPLIED</span>
-          <span style={{ color: "#222", fontSize: 10 }}>{entry.dateApplied}</span>
+          {color === "green"
+            ? <span style={{ color: "#4ade80", fontSize: 10, fontWeight: 700 }}>✓ APPLIED</span>
+            : <span style={{ color: "#f87171", fontSize: 10, fontWeight: 700 }}>✗ NOT INTERESTED</span>}
+          {dateLabel && <span style={{ color: "#222", fontSize: 10 }}>{dateLabel}</span>}
         </div>
         <div style={{ color: "#e0e0e0", fontWeight: 600, fontSize: 13 }}>{entry.title}</div>
-        <div style={{ color: "#555", fontSize: 11 }}>{entry.company} · {entry.location}</div>
+        <div style={{ color: "#555", fontSize: 11 }}>{entry.company}{entry.location ? ` · ${entry.location}` : ""}</div>
+        {entry.salary && <div style={{ color: c.color, fontSize: 10, marginTop: 2, fontFamily: "'JetBrains Mono', monospace" }}>{entry.salary}</div>}
       </div>
       {entry.applyUrl && (
         <a href={entry.applyUrl} target="_blank" rel="noreferrer" style={{
-          background: "transparent", border: "1px solid #14532d",
-          color: "#4ade80", borderRadius: 4, padding: "4px 10px",
+          background: "transparent",
+          border: `1px solid ${color === "green" ? "#14532d" : "#3a1a1a"}`,
+          color: color === "green" ? "#4ade80" : "#f87171",
+          borderRadius: 4, padding: "4px 10px",
           fontSize: 10, textDecoration: "none", whiteSpace: "nowrap"
         }}>View</a>
       )}
-      <button onClick={() => onUnapply(entry.id)} style={{
+      <button onClick={() => onAction(entry.id)} title={actionLabel} style={{
         background: "transparent", border: "1px solid #1a1a1a",
         color: "#333", borderRadius: 4, padding: "4px 9px",
         fontSize: 10, cursor: "pointer"
@@ -150,7 +175,6 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("ALL");
-  const [showHidden, setShowHidden] = useState(false);
 
   const [applied, setApplied] = useState(() => loadStorage(STORAGE.applied, {}));
   const [hidden, setHidden] = useState(() => loadStorage(STORAGE.hidden, {}));
@@ -159,7 +183,6 @@ export default function App() {
     setLoading(true);
     setError(null);
     try {
-      // Cache-bust to ensure we always get the latest
       const res = await fetch(`/api/jobs?t=${Date.now()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
@@ -175,19 +198,14 @@ export default function App() {
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
 
   const markApplied = (job) => {
-    const isCurrentlyApplied = !!applied[job.id];
     const next = { ...applied };
-    if (isCurrentlyApplied) {
+    if (next[job.id]) {
       delete next[job.id];
     } else {
       next[job.id] = {
-        id: job.id,
-        title: job.title,
-        company: job.company,
-        location: job.location,
-        fit: job.fit,
-        applyUrl: job.applyUrl,
-        platform: job.platform,
+        id: job.id, title: job.title, company: job.company,
+        location: job.location, fit: job.fit, applyUrl: job.applyUrl,
+        platform: job.platform, salary: job.salary,
         dateApplied: new Date().toLocaleDateString(),
       };
     }
@@ -202,21 +220,28 @@ export default function App() {
     saveStorage(STORAGE.applied, next);
   };
 
-  const toggleHidden = (job) => {
+  const hide = (job) => {
     const next = { ...hidden };
-    if (next[job.id]) delete next[job.id];
-    else next[job.id] = true;
+    next[job.id] = {
+      id: job.id, title: job.title, company: job.company,
+      location: job.location, fit: job.fit, applyUrl: job.applyUrl,
+      platform: job.platform, salary: job.salary,
+      dateHidden: new Date().toLocaleDateString(),
+    };
     setHidden(next);
     saveStorage(STORAGE.hidden, next);
   };
 
-  // Filter the active feed: hide applied + hidden by default
-  const activeFeed = jobs.filter(j => {
-    if (applied[j.id]) return false;       // never show applied jobs in active feed
-    if (!showHidden && hidden[j.id]) return false;
-    return true;
-  });
+  const unhide = (job) => {
+    const id = typeof job === "string" ? job : job.id;
+    const next = { ...hidden };
+    delete next[id];
+    setHidden(next);
+    saveStorage(STORAGE.hidden, next);
+  };
 
+  // Active feed: not applied AND not hidden
+  const activeFeed = jobs.filter(j => !applied[j.id] && !hidden[j.id]);
   const fitFiltered = filter === "ALL" ? activeFeed : activeFeed.filter(j => j.fit === filter);
 
   const counts = {
@@ -224,11 +249,9 @@ export default function App() {
     MED: activeFeed.filter(j => j.fit === "MED").length,
     LOW: activeFeed.filter(j => j.fit === "LOW").length,
   };
-  const appliedList = Object.values(applied).sort((a, b) =>
-    new Date(b.dateApplied) - new Date(a.dateApplied)
-  );
 
-  const hiddenCount = jobs.filter(j => hidden[j.id]).length;
+  const appliedList = Object.values(applied).sort((a, b) => new Date(b.dateApplied) - new Date(a.dateApplied));
+  const hiddenList = Object.values(hidden).sort((a, b) => new Date(b.dateHidden) - new Date(a.dateHidden));
 
   return (
     <div style={{ background: "#060606", minHeight: "100vh", color: "#f0f0f0", fontFamily: "'Syne', 'Helvetica Neue', sans-serif" }}>
@@ -250,7 +273,7 @@ export default function App() {
         <div>
           <div style={{ fontSize: 13, fontWeight: 800, letterSpacing: "0.06em" }}>MATT'S JOB RADAR</div>
           <div style={{ fontSize: 9, color: "#2a2a2a", fontFamily: "'JetBrains Mono', monospace", marginTop: 1 }}>
-            {jobs.length} listings · {appliedList.length} applied
+            {jobs.length} listings · {appliedList.length} applied · {hiddenList.length} hidden
           </div>
         </div>
         <button onClick={fetchJobs} disabled={loading} style={{
@@ -260,8 +283,7 @@ export default function App() {
           borderRadius: 6, padding: "7px 14px",
           fontSize: 11, fontWeight: 700,
           cursor: loading ? "not-allowed" : "pointer",
-          display: "flex", alignItems: "center", gap: 6,
-          letterSpacing: "0.05em"
+          display: "flex", alignItems: "center", gap: 6, letterSpacing: "0.05em"
         }}>
           {loading ? (
             <>
@@ -272,22 +294,25 @@ export default function App() {
         </button>
       </div>
 
-      {/* Tabs */}
+      {/* Three tabs now */}
       <div style={{ display: "flex", borderBottom: "1px solid #111", background: "#060606", position: "sticky", top: 53, zIndex: 19 }}>
-        {[["active", "New Listings", activeFeed.length], ["applied", "Applied", appliedList.length]].map(([id, label, n]) => (
+        {[
+          ["active", "New", activeFeed.length, "#4ade80"],
+          ["applied", "Applied", appliedList.length, "#4ade80"],
+          ["hidden", "Not Interested", hiddenList.length, "#f87171"],
+        ].map(([id, label, n, accent]) => (
           <button key={id} onClick={() => setTab(id)} style={{
             flex: 1, padding: "11px 0", background: "transparent", border: "none",
-            borderBottom: `2px solid ${tab === id ? "#4ade80" : "transparent"}`,
+            borderBottom: `2px solid ${tab === id ? accent : "transparent"}`,
             color: tab === id ? "#f0f0f0" : "#444",
-            fontSize: 12, fontWeight: tab === id ? 700 : 400,
-            cursor: "pointer",
-            display: "flex", alignItems: "center", justifyContent: "center", gap: 7
+            fontSize: 11, fontWeight: tab === id ? 700 : 400,
+            cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 6
           }}>
             {label}
             <span style={{
-              background: tab === id ? "#0a2416" : "#111",
-              color: tab === id ? "#4ade80" : "#444",
-              border: `1px solid ${tab === id ? "#14532d" : "#1e1e1e"}`,
+              background: tab === id ? (accent === "#4ade80" ? "#0a2416" : "#1a0a0a") : "#111",
+              color: tab === id ? accent : "#444",
+              border: `1px solid ${tab === id ? (accent === "#4ade80" ? "#14532d" : "#3a1a1a") : "#1e1e1e"}`,
               borderRadius: 20, padding: "0 6px",
               fontSize: 9, fontWeight: 700, fontFamily: "'JetBrains Mono', monospace"
             }}>{n}</span>
@@ -297,7 +322,6 @@ export default function App() {
 
       <div style={{ maxWidth: 780, margin: "0 auto", padding: "18px 14px" }}>
 
-        {/* Last updated bar */}
         {lastUpdated && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
             <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", display: "inline-block", boxShadow: "0 0 6px #4ade80" }} />
@@ -323,7 +347,7 @@ export default function App() {
         {tab === "active" && (
           <>
             {jobs.length > 0 && (
-              <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap", alignItems: "center" }}>
+              <div style={{ display: "flex", gap: 5, marginBottom: 14, flexWrap: "wrap" }}>
                 {[["ALL", activeFeed.length], ["HIGH", counts.HIGH], ["MED", counts.MED], ["LOW", counts.LOW]].map(([f, n]) => (
                   <button key={f} onClick={() => setFilter(f)} style={{
                     background: filter === f ? "#111" : "transparent",
@@ -333,14 +357,6 @@ export default function App() {
                     fontSize: 10, fontWeight: 700, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace"
                   }}>{f} {n}</button>
                 ))}
-                {hiddenCount > 0 && (
-                  <button onClick={() => setShowHidden(v => !v)} style={{
-                    marginLeft: "auto", background: "transparent",
-                    border: "1px solid #2a2a2a", color: showHidden ? "#888" : "#444",
-                    borderRadius: 4, padding: "4px 10px",
-                    fontSize: 10, cursor: "pointer", fontFamily: "'JetBrains Mono', monospace"
-                  }}>{showHidden ? "Hide" : "Show"} hidden ({hiddenCount})</button>
-                )}
               </div>
             )}
 
@@ -355,7 +371,7 @@ export default function App() {
               <div style={{ textAlign: "center", padding: "60px 0", color: "#2a2a2a", fontSize: 13 }}>
                 No new {filter !== "ALL" ? filter : ""} listings.
                 <div style={{ color: "#1a1a1a", fontSize: 11, marginTop: 6 }}>
-                  All matching jobs have been applied to or hidden.
+                  All matching jobs have been applied to or marked Not Interested.
                 </div>
               </div>
             )}
@@ -364,10 +380,11 @@ export default function App() {
               <div key={job.id} style={{ animation: "fadeIn 0.25s ease" }}>
                 <JobCard
                   job={job}
-                  isApplied={!!applied[job.id]}
-                  isHidden={!!hidden[job.id]}
+                  isApplied={false}
+                  isHidden={false}
                   onApply={markApplied}
-                  onHide={toggleHidden}
+                  onHide={hide}
+                  onUnhide={unhide}
                 />
               </div>
             ))}
@@ -395,7 +412,43 @@ export default function App() {
                   {appliedList.length} application{appliedList.length !== 1 ? "s" : ""}
                 </div>
                 {appliedList.map(entry => (
-                  <AppliedRow key={entry.id} entry={entry} onUnapply={unapply} />
+                  <HistoryRow
+                    key={entry.id}
+                    entry={entry}
+                    onAction={unapply}
+                    actionLabel="Unmark applied"
+                    color="green"
+                    dateLabel={entry.dateApplied}
+                  />
+                ))}
+              </>
+            )}
+          </>
+        )}
+
+        {tab === "hidden" && (
+          <>
+            {hiddenList.length === 0 ? (
+              <div style={{ textAlign: "center", padding: "70px 0", color: "#2a2a2a", fontSize: 13 }}>
+                Nothing marked Not Interested.
+                <div style={{ color: "#1a1a1a", fontSize: 11, marginTop: 6 }}>
+                  Tap "Not Interested" on any listing to hide it from your feed.
+                </div>
+              </div>
+            ) : (
+              <>
+                <div style={{ color: "#444", fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 12, fontFamily: "'JetBrains Mono', monospace" }}>
+                  {hiddenList.length} hidden listing{hiddenList.length !== 1 ? "s" : ""}
+                </div>
+                {hiddenList.map(entry => (
+                  <HistoryRow
+                    key={entry.id}
+                    entry={entry}
+                    onAction={unhide}
+                    actionLabel="Restore"
+                    color="red"
+                    dateLabel={entry.dateHidden}
+                  />
                 ))}
               </>
             )}
