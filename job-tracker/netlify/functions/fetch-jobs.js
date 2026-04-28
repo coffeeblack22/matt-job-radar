@@ -1,5 +1,5 @@
 // netlify/functions/fetch-jobs.js
-// Scheduled function — scrapes Indeed RSS + LinkedIn guest API, scores against profile
+// Scheduled function — scrapes LinkedIn + Adzuna + Indeed RSS, scores, deduplicates
 
 import { schedule } from "@netlify/functions";
 
@@ -65,6 +65,17 @@ function extractSalary(text) {
   return "";
 }
 
+// Format Adzuna's numeric salary fields into a readable range
+function formatAdzunaSalary(min, max) {
+  if (!min && !max) return "";
+  const fmt = (n) => {
+    if (n >= 1000) return `$${Math.round(n / 1000)}k`;
+    return `$${Math.round(n)}`;
+  };
+  if (min && max && min !== max) return `${fmt(min)} - ${fmt(max)}`;
+  return fmt(min || max);
+}
+
 function cleanDescription(text, maxLength = 500) {
   if (!text) return "";
   let cleaned = text
@@ -88,57 +99,69 @@ function cleanDescription(text, maxLength = 500) {
   return cleaned;
 }
 
-async function fetchIndeed(query, location) {
-  const url = `https://www.indeed.com/rss?q=${encodeURIComponent(query)}&l=${encodeURIComponent(location)}&fromage=3&sort=date`;
+function decodeHtml(text) {
+  if (!text) return "";
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'");
+}
+
+// === ADZUNA API (rich data: descriptions + salaries) ===
+async function fetchAdzuna(query, location) {
+  const appId = process.env.ADZUNA_APP_ID;
+  const appKey = process.env.ADZUNA_APP_KEY;
+  if (!appId || !appKey) {
+    console.warn("Adzuna credentials missing — skipping");
+    return [];
+  }
+
+  // Adzuna prefers location as just the city, not "City, State"
+  const cleanLocation = location.split(",")[0].trim();
+  const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(query)}&where=${encodeURIComponent(cleanLocation)}&max_days_old=3&sort_by=date`;
+
   try {
     const res = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; JobTracker/1.0)", "Accept": "application/rss+xml,application/xml,text/xml" }
+      headers: { "Accept": "application/json" }
     });
-    if (!res.ok) { console.error(`Indeed RSS ${res.status} for ${query}`); return []; }
-    const xml = await res.text();
-    return parseIndeedRSS(xml);
+    if (!res.ok) {
+      console.error(`Adzuna ${res.status} for ${query}`);
+      return [];
+    }
+    const data = await res.json();
+    return (data.results || []).map(parseAdzunaJob).filter(Boolean);
   } catch (e) {
-    console.error("Indeed fetch failed:", e.message);
+    console.error("Adzuna fetch failed:", e.message);
     return [];
   }
 }
 
-function parseIndeedRSS(xml) {
-  const items = [];
-  const itemRegex = /<item>([\s\S]*?)<\/item>/g;
-  const fieldRegex = (field) => new RegExp(`<${field}[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/${field}>`);
-  let match;
-  while ((match = itemRegex.exec(xml)) !== null) {
-    const item = match[1];
-    const titleMatch = item.match(fieldRegex("title"));
-    const linkMatch = item.match(fieldRegex("link"));
-    const descMatch = item.match(fieldRegex("description"));
-    const dateMatch = item.match(fieldRegex("pubDate"));
-    if (!titleMatch || !linkMatch) continue;
-    const fullTitle = titleMatch[1].trim();
-    const parts = fullTitle.split(" - ");
-    const title = parts[0]?.trim() || fullTitle;
-    const company = parts[1]?.trim() || "Unknown";
-    const location = parts.slice(2).join(" - ").trim() || "";
-    const rawDesc = descMatch?.[1] || "";
-    const description = cleanDescription(rawDesc, 500);
-    const salary = extractSalary(rawDesc);
-    const url = linkMatch[1].trim();
-    const id = makeJobId(company, title, location);
-    const scoring = scoreListing(title, description);
-    items.push({
-      id, title, company, location,
-      summary: description, applyUrl: url,
-      platform: "Indeed",
-      posted: dateMatch ? formatDate(dateMatch[1]) : "Recent",
-      fit: scoring.fit, fitReason: scoring.reason,
-      keyMatch: scoring.matches?.slice(0, 4) || [],
-      salary, scrapedAt: new Date().toISOString(),
-    });
-  }
-  return items;
+function parseAdzunaJob(j) {
+  if (!j.title || !j.company?.display_name) return null;
+  const title = decodeHtml(j.title).trim();
+  const company = decodeHtml(j.company.display_name).trim();
+  const location = j.location?.display_name || "";
+  const description = cleanDescription(j.description, 500);
+  const salary = formatAdzunaSalary(j.salary_min, j.salary_max) || extractSalary(description);
+  const id = makeJobId(company, title, location);
+  const scoring = scoreListing(title, description);
+  return {
+    id, title, company, location,
+    summary: description,
+    applyUrl: j.redirect_url,
+    platform: "Adzuna",
+    posted: j.created ? formatDate(j.created) : "Recent",
+    fit: scoring.fit,
+    fitReason: scoring.reason,
+    keyMatch: scoring.matches?.slice(0, 4) || [],
+    salary,
+    scrapedAt: new Date().toISOString(),
+  };
 }
 
+// === LINKEDIN GUEST API ===
 async function fetchLinkedIn(query, location) {
   const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&f_TPR=r86400&start=0`;
   try {
@@ -166,19 +189,18 @@ function parseLinkedInHTML(html) {
     const dateMatch = card.match(/<time[^>]*datetime="([^"]+)"/);
     const salaryMatch = card.match(/<span[^>]*class="[^"]*job-search-card__salary[^"]*"[^>]*>([\s\S]*?)<\/span>/);
     if (!titleMatch || !linkMatch) continue;
-    const title = titleMatch[1].replace(/<[^>]+>/g, "").trim();
-    const company = (companyMatch?.[1] || "").replace(/<[^>]+>/g, "").trim() || "Unknown";
-    const location = (locationMatch?.[1] || "").replace(/<[^>]+>/g, "").trim();
+    const title = decodeHtml(titleMatch[1].replace(/<[^>]+>/g, "").trim());
+    const company = decodeHtml((companyMatch?.[1] || "").replace(/<[^>]+>/g, "").trim()) || "Unknown";
+    const location = decodeHtml((locationMatch?.[1] || "").replace(/<[^>]+>/g, "").trim());
     const url = linkMatch[1].split("?")[0];
     const rawSalaryText = (salaryMatch?.[1] || "").replace(/<[^>]+>/g, "").trim();
-    const salary = rawSalaryText
-      ? rawSalaryText.replace(/\s+/g, " ").slice(0, 50)
-      : extractSalary(rawSalaryText);
+    const salary = rawSalaryText ? rawSalaryText.replace(/\s+/g, " ").slice(0, 50) : "";
     const id = makeJobId(company, title, location);
     const scoring = scoreListing(title, "");
     items.push({
       id, title, company, location,
-      summary: "", applyUrl: url,
+      summary: "",
+      applyUrl: url,
       platform: "LinkedIn",
       posted: dateMatch ? formatDate(dateMatch[1]) : "Recent",
       fit: scoring.fit, fitReason: scoring.reason,
@@ -202,29 +224,65 @@ function formatDate(dateStr) {
   }
 }
 
+// === MERGE STRATEGY ===
+// When the same job comes from multiple sources (LinkedIn + Adzuna), prefer Adzuna
+// because it has descriptions and structured salary data
+function mergeListings(allJobs) {
+  const merged = new Map();
+  // Process in order: Adzuna first (richer data wins), then LinkedIn
+  const sorted = [...allJobs].sort((a, b) => {
+    const priority = { Adzuna: 0, LinkedIn: 1, Indeed: 2 };
+    return (priority[a.platform] ?? 99) - (priority[b.platform] ?? 99);
+  });
+  for (const job of sorted) {
+    if (!merged.has(job.id)) {
+      merged.set(job.id, job);
+    } else {
+      // Same job from a second source — fill in any missing fields
+      const existing = merged.get(job.id);
+      if (!existing.summary && job.summary) existing.summary = job.summary;
+      if (!existing.salary && job.salary) existing.salary = job.salary;
+    }
+  }
+  return Array.from(merged.values());
+}
+
 const scrapeHandler = async (event, context) => {
   console.log("Job scraper running at", new Date().toISOString());
   const allJobs = [];
-  const seenIds = new Set();
+
   for (const search of SEARCHES) {
-    const [indeedJobs, linkedinJobs] = await Promise.all([
-      fetchIndeed(search.query, search.location),
+    const [adzunaJobs, linkedinJobs] = await Promise.all([
+      fetchAdzuna(search.query, search.location),
       fetchLinkedIn(search.query, search.location),
     ]);
-    for (const job of [...indeedJobs, ...linkedinJobs]) {
-      if (!seenIds.has(job.id)) {
-        seenIds.add(job.id);
-        allJobs.push(job);
-      }
+    console.log(`"${search.query}" in ${search.location}: ${adzunaJobs.length} Adzuna + ${linkedinJobs.length} LinkedIn`);
+    allJobs.push(...adzunaJobs, ...linkedinJobs);
+  }
+
+  // Merge duplicates, preferring richer data
+  const unique = mergeListings(allJobs);
+
+  // Re-score after merge (descriptions may have changed fit assessment)
+  for (const job of unique) {
+    if (job.summary) {
+      const rescore = scoreListing(job.title, job.summary);
+      job.fit = rescore.fit;
+      job.fitReason = rescore.reason;
+      job.keyMatch = rescore.matches?.slice(0, 4) || [];
     }
   }
+
+  // Sort: HIGH first, then MED, then LOW; within each, newest first
   const fitOrder = { HIGH: 0, MED: 1, LOW: 2 };
-  allJobs.sort((a, b) => {
+  unique.sort((a, b) => {
     const fitDiff = fitOrder[a.fit] - fitOrder[b.fit];
     if (fitDiff !== 0) return fitDiff;
     return (b.scrapedAt || "").localeCompare(a.scrapedAt || "");
   });
-  console.log(`Returning ${allJobs.length} unique listings`);
+
+  console.log(`Returning ${unique.length} unique listings (${unique.filter(j => j.summary).length} with descriptions, ${unique.filter(j => j.salary).length} with salary)`);
+
   return {
     statusCode: 200,
     headers: {
@@ -233,13 +291,15 @@ const scrapeHandler = async (event, context) => {
       "Access-Control-Allow-Origin": "*",
     },
     body: JSON.stringify({
-      jobs: allJobs,
+      jobs: unique,
       lastUpdated: new Date().toISOString(),
       counts: {
-        total: allJobs.length,
-        high: allJobs.filter(j => j.fit === "HIGH").length,
-        med: allJobs.filter(j => j.fit === "MED").length,
-        low: allJobs.filter(j => j.fit === "LOW").length,
+        total: unique.length,
+        high: unique.filter(j => j.fit === "HIGH").length,
+        med: unique.filter(j => j.fit === "MED").length,
+        low: unique.filter(j => j.fit === "LOW").length,
+        withSalary: unique.filter(j => j.salary).length,
+        withDescription: unique.filter(j => j.summary).length,
       }
     }),
   };
