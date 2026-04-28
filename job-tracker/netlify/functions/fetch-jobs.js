@@ -29,7 +29,6 @@ const KEYWORDS_NEGATIVE = [
   "trainee program", "career changer"
 ];
 
-// === Stable ID for de-duplication ===
 function makeJobId(company, title, location) {
   const seed = `${company}|${title}|${location || ""}`.toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9|]/g, "");
   let hash = 0;
@@ -40,50 +39,26 @@ function makeJobId(company, title, location) {
   return "j_" + Math.abs(hash).toString(36);
 }
 
-// === Score a listing HIGH / MED / LOW ===
 function scoreListing(title, description) {
   const text = `${title} ${description || ""}`.toLowerCase();
-
-  // Negative keywords kill the score immediately
   const hasNegative = KEYWORDS_NEGATIVE.some(k => text.includes(k));
   if (hasNegative) return { fit: "LOW", reason: "Trainee/entry-level role — past your experience level." };
-
   const highMatches = KEYWORDS_HIGH.filter(k => text.includes(k));
   const medMatches = KEYWORDS_MED.filter(k => text.includes(k));
-
   if (highMatches.length >= 2) {
-    return {
-      fit: "HIGH",
-      reason: `Strong match: ${highMatches.slice(0, 3).join(", ")}.`,
-      matches: highMatches
-    };
+    return { fit: "HIGH", reason: `Strong match: ${highMatches.slice(0, 3).join(", ")}.`, matches: highMatches };
   }
   if (highMatches.length === 1) {
-    return {
-      fit: "MED",
-      reason: `Partial match: ${highMatches[0]}${medMatches.length ? `, plus ${medMatches.slice(0, 2).join(", ")}` : ""}.`,
-      matches: [...highMatches, ...medMatches]
-    };
+    return { fit: "MED", reason: `Partial match: ${highMatches[0]}${medMatches.length ? `, plus ${medMatches.slice(0, 2).join(", ")}` : ""}.`, matches: [...highMatches, ...medMatches] };
   }
   if (medMatches.length >= 2) {
-    return {
-      fit: "MED",
-      reason: `Adjacent role: ${medMatches.slice(0, 3).join(", ")}.`,
-      matches: medMatches
-    };
+    return { fit: "MED", reason: `Adjacent role: ${medMatches.slice(0, 3).join(", ")}.`, matches: medMatches };
   }
-  return {
-    fit: "LOW",
-    reason: "No strong keyword matches against your profile.",
-    matches: []
-  };
+  return { fit: "LOW", reason: "No strong keyword matches against your profile.", matches: [] };
 }
 
-// === INDEED RSS SCRAPER ===
-// Indeed publishes RSS feeds for any search query, no auth required
 async function fetchIndeed(query, location) {
   const url = `https://www.indeed.com/rss?q=${encodeURIComponent(query)}&l=${encodeURIComponent(location)}&fromage=3&sort=date`;
-
   try {
     const res = await fetch(url, {
       headers: {
@@ -91,10 +66,7 @@ async function fetchIndeed(query, location) {
         "Accept": "application/rss+xml,application/xml,text/xml"
       }
     });
-    if (!res.ok) {
-      console.error(`Indeed RSS ${res.status} for ${query}`);
-      return [];
-    }
+    if (!res.ok) { console.error(`Indeed RSS ${res.status} for ${query}`); return []; }
     const xml = await res.text();
     return parseIndeedRSS(xml);
   } catch (e) {
@@ -105,10 +77,8 @@ async function fetchIndeed(query, location) {
 
 function parseIndeedRSS(xml) {
   const items = [];
-  // Simple regex-based RSS parser (avoids needing xml2js dependency)
   const itemRegex = /<item>([\s\S]*?)<\/item>/g;
   const fieldRegex = (field) => new RegExp(`<${field}[^>]*>(?:<!\\[CDATA\\[)?([\\s\\S]*?)(?:\\]\\]>)?<\\/${field}>`);
-
   let match;
   while ((match = itemRegex.exec(xml)) !== null) {
     const item = match[1];
@@ -116,46 +86,31 @@ function parseIndeedRSS(xml) {
     const linkMatch = item.match(fieldRegex("link"));
     const descMatch = item.match(fieldRegex("description"));
     const dateMatch = item.match(fieldRegex("pubDate"));
-
     if (!titleMatch || !linkMatch) continue;
-
-    // Indeed titles are formatted: "Job Title - Company - Location"
     const fullTitle = titleMatch[1].trim();
     const parts = fullTitle.split(" - ");
     const title = parts[0]?.trim() || fullTitle;
     const company = parts[1]?.trim() || "Unknown";
     const location = parts.slice(2).join(" - ").trim() || "";
-
     const description = (descMatch?.[1] || "").replace(/<[^>]+>/g, "").slice(0, 400);
     const url = linkMatch[1].trim();
-
     const id = makeJobId(company, title, location);
     const scoring = scoreListing(title, description);
-
     items.push({
-      id,
-      title,
-      company,
-      location,
-      summary: description,
-      applyUrl: url,
+      id, title, company, location,
+      summary: description, applyUrl: url,
       platform: "Indeed",
       posted: dateMatch ? formatDate(dateMatch[1]) : "Recent",
-      fit: scoring.fit,
-      fitReason: scoring.reason,
+      fit: scoring.fit, fitReason: scoring.reason,
       keyMatch: scoring.matches?.slice(0, 4) || [],
-      salary: "",
-      scrapedAt: new Date().toISOString(),
+      salary: "", scrapedAt: new Date().toISOString(),
     });
   }
   return items;
 }
 
-// === LINKEDIN GUEST API ===
-// LinkedIn's public job search guest API doesn't require auth
 async function fetchLinkedIn(query, location) {
   const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&f_TPR=r86400&start=0`;
-
   try {
     const res = await fetch(url, {
       headers: {
@@ -163,10 +118,7 @@ async function fetchLinkedIn(query, location) {
         "Accept": "text/html,application/xhtml+xml"
       }
     });
-    if (!res.ok) {
-      console.error(`LinkedIn ${res.status} for ${query}`);
-      return [];
-    }
+    if (!res.ok) { console.error(`LinkedIn ${res.status} for ${query}`); return []; }
     const html = await res.text();
     return parseLinkedInHTML(html);
   } catch (e) {
@@ -177,41 +129,29 @@ async function fetchLinkedIn(query, location) {
 
 function parseLinkedInHTML(html) {
   const items = [];
-  // LinkedIn returns HTML cards — parse with regex
   const cardRegex = /<li[^>]*>[\s\S]*?<\/li>/g;
   const cards = html.match(cardRegex) || [];
-
   for (const card of cards) {
     const titleMatch = card.match(/<h3[^>]*class="[^"]*base-search-card__title[^"]*"[^>]*>([\s\S]*?)<\/h3>/);
     const companyMatch = card.match(/<h4[^>]*class="[^"]*base-search-card__subtitle[^"]*"[^>]*>([\s\S]*?)<\/h4>/);
     const locationMatch = card.match(/<span[^>]*class="[^"]*job-search-card__location[^"]*"[^>]*>([\s\S]*?)<\/span>/);
     const linkMatch = card.match(/<a[^>]*class="[^"]*base-card__full-link[^"]*"[^>]*href="([^"]+)"/);
     const dateMatch = card.match(/<time[^>]*datetime="([^"]+)"/);
-
     if (!titleMatch || !linkMatch) continue;
-
     const title = titleMatch[1].replace(/<[^>]+>/g, "").trim();
     const company = (companyMatch?.[1] || "").replace(/<[^>]+>/g, "").trim() || "Unknown";
     const location = (locationMatch?.[1] || "").replace(/<[^>]+>/g, "").trim();
     const url = linkMatch[1].split("?")[0];
-
     const id = makeJobId(company, title, location);
     const scoring = scoreListing(title, "");
-
     items.push({
-      id,
-      title,
-      company,
-      location,
-      summary: "",
-      applyUrl: url,
+      id, title, company, location,
+      summary: "", applyUrl: url,
       platform: "LinkedIn",
       posted: dateMatch ? formatDate(dateMatch[1]) : "Recent",
-      fit: scoring.fit,
-      fitReason: scoring.reason,
+      fit: scoring.fit, fitReason: scoring.reason,
       keyMatch: scoring.matches?.slice(0, 4) || [],
-      salary: "",
-      scrapedAt: new Date().toISOString(),
+      salary: "", scrapedAt: new Date().toISOString(),
     });
   }
   return items;
@@ -230,20 +170,15 @@ function formatDate(dateStr) {
   }
 }
 
-// === MAIN HANDLER ===
-const handler = async (event, context) => {
+const scrapeHandler = async (event, context) => {
   console.log("Job scraper running at", new Date().toISOString());
-
   const allJobs = [];
   const seenIds = new Set();
-
-  // Scrape every search across both platforms
   for (const search of SEARCHES) {
     const [indeedJobs, linkedinJobs] = await Promise.all([
       fetchIndeed(search.query, search.location),
       fetchLinkedIn(search.query, search.location),
     ]);
-
     for (const job of [...indeedJobs, ...linkedinJobs]) {
       if (!seenIds.has(job.id)) {
         seenIds.add(job.id);
@@ -251,17 +186,13 @@ const handler = async (event, context) => {
       }
     }
   }
-
-  // Sort: HIGH first, then MED, then LOW; within each, newest first
   const fitOrder = { HIGH: 0, MED: 1, LOW: 2 };
   allJobs.sort((a, b) => {
     const fitDiff = fitOrder[a.fit] - fitOrder[b.fit];
     if (fitDiff !== 0) return fitDiff;
     return (b.scrapedAt || "").localeCompare(a.scrapedAt || "");
   });
-
   console.log(`Returning ${allJobs.length} unique listings`);
-
   return {
     statusCode: 200,
     headers: {
@@ -282,9 +213,4 @@ const handler = async (event, context) => {
   };
 };
 
-// Schedule: 8 AM and 4 PM ET daily (12:00 and 20:00 UTC)
-export const config = {
-  schedule: "0 12,20 * * *"
-};
-
-export { handler };
+export const handler = schedule("0 12,20 * * *", scrapeHandler);
