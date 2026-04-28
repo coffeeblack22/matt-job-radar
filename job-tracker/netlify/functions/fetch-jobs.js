@@ -1,5 +1,6 @@
 // netlify/functions/fetch-jobs.js
-// Scheduled function — scrapes LinkedIn + Adzuna + Indeed RSS, scores, deduplicates
+// Scheduled function — scrapes LinkedIn + Adzuna, scores, deduplicates,
+// strips marketing fluff from descriptions
 
 import { schedule } from "@netlify/functions";
 
@@ -25,6 +26,78 @@ const KEYWORDS_NEGATIVE = [
   "entry level no experience", "commission only", "100% commission",
   "trainee program", "career changer"
 ];
+
+// === Patterns that signal company boilerplate (skip these) ===
+const FLUFF_PATTERNS = [
+  /^[A-Z][\w\s&'.,]+ is (a |one of )?(the )?(leading|largest|premier|top|global|world|world's)/i,
+  /^[A-Z][\w\s&'.,]+ is one of/i,
+  /^About [A-Z]/i,
+  /^Our mission/i,
+  /^We are committed/i,
+  /^At [A-Z][\w\s&]+,? we/i,
+  /^Founded in \d{4}/i,
+  /^Headquartered in/i,
+  /^[A-Z][\w\s&'.,]+ specializes in/i,
+  /^[A-Z][\w\s&'.,]+ provides (comprehensive|world-class|industry-leading)/i,
+  /^[A-Z][\w\s&'.,]+ has (been|long|served)/i,
+];
+
+// === Patterns that signal real role description (start here) ===
+const ROLE_INDICATORS = [
+  /^(As an?|As the) [A-Z]/i,
+  /^(In this role|In this position)/i,
+  /^You (will|'ll)/i,
+  /^Job Description/i,
+  /^Responsibilities/i,
+  /^The (role|position)/i,
+  /^This (role|position)/i,
+  /^Join (our|the)/i,
+  /^We are (looking|seeking|hiring)/i,
+  /^The successful candidate/i,
+  /^The ideal candidate/i,
+  /^Primary (responsibilities|duties)/i,
+  /^Key (responsibilities|duties)/i,
+  /^What you('ll| will) do/i,
+];
+
+function isFluff(sentence) {
+  return FLUFF_PATTERNS.some(rx => rx.test(sentence.trim()));
+}
+
+function isRoleSpecific(sentence) {
+  return ROLE_INDICATORS.some(rx => rx.test(sentence.trim()));
+}
+
+// Strips company boilerplate, returns role-specific section only
+function extractRoleDescription(text, maxLength = 500) {
+  if (!text) return "";
+  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
+
+  // First, look for an explicit role indicator
+  let roleStartIdx = sentences.findIndex(s => isRoleSpecific(s));
+
+  // If no role indicator, skip leading fluff sentences
+  if (roleStartIdx === -1) {
+    let i = 0;
+    while (i < sentences.length && isFluff(sentences[i])) {
+      i++;
+    }
+    roleStartIdx = i;
+  }
+
+  // All fluff, no role content? Return empty (honest > misleading)
+  if (roleStartIdx >= sentences.length) return "";
+
+  let result = sentences.slice(roleStartIdx).join("").trim();
+  if (result.length > maxLength) {
+    const truncated = result.slice(0, maxLength);
+    const lastPeriod = truncated.lastIndexOf(".");
+    result = lastPeriod > maxLength * 0.6
+      ? truncated.slice(0, lastPeriod + 1)
+      : truncated + "...";
+  }
+  return result;
+}
 
 function makeJobId(company, title, location) {
   const seed = `${company}|${title}|${location || ""}`.toLowerCase().replace(/\s+/g, "").replace(/[^a-z0-9|]/g, "");
@@ -65,7 +138,6 @@ function extractSalary(text) {
   return "";
 }
 
-// Format Adzuna's numeric salary fields into a readable range
 function formatAdzunaSalary(min, max) {
   if (!min && !max) return "";
   const fmt = (n) => {
@@ -76,9 +148,10 @@ function formatAdzunaSalary(min, max) {
   return fmt(min || max);
 }
 
-function cleanDescription(text, maxLength = 500) {
+// Strip HTML tags + decode entities + normalize whitespace
+function cleanRawText(text) {
   if (!text) return "";
-  let cleaned = text
+  return text
     .replace(/<[^>]+>/g, " ")
     .replace(/&nbsp;/g, " ")
     .replace(/&amp;/g, "&")
@@ -89,14 +162,6 @@ function cleanDescription(text, maxLength = 500) {
     .replace(/&hellip;/g, "...")
     .replace(/\s+/g, " ")
     .trim();
-  if (cleaned.length > maxLength) {
-    const truncated = cleaned.slice(0, maxLength);
-    const lastPeriod = truncated.lastIndexOf(".");
-    cleaned = lastPeriod > maxLength * 0.6
-      ? truncated.slice(0, lastPeriod + 1)
-      : truncated + "...";
-  }
-  return cleaned;
 }
 
 function decodeHtml(text) {
@@ -109,7 +174,7 @@ function decodeHtml(text) {
     .replace(/&#39;/g, "'");
 }
 
-// === ADZUNA API (rich data: descriptions + salaries) ===
+// === ADZUNA ===
 async function fetchAdzuna(query, location) {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
@@ -117,19 +182,11 @@ async function fetchAdzuna(query, location) {
     console.warn("Adzuna credentials missing — skipping");
     return [];
   }
-
-  // Adzuna prefers location as just the city, not "City, State"
   const cleanLocation = location.split(",")[0].trim();
   const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(query)}&where=${encodeURIComponent(cleanLocation)}&max_days_old=3&sort_by=date`;
-
   try {
-    const res = await fetch(url, {
-      headers: { "Accept": "application/json" }
-    });
-    if (!res.ok) {
-      console.error(`Adzuna ${res.status} for ${query}`);
-      return [];
-    }
+    const res = await fetch(url, { headers: { "Accept": "application/json" } });
+    if (!res.ok) { console.error(`Adzuna ${res.status} for ${query}`); return []; }
     const data = await res.json();
     return (data.results || []).map(parseAdzunaJob).filter(Boolean);
   } catch (e) {
@@ -143,10 +200,17 @@ function parseAdzunaJob(j) {
   const title = decodeHtml(j.title).trim();
   const company = decodeHtml(j.company.display_name).trim();
   const location = j.location?.display_name || "";
-  const description = cleanDescription(j.description, 500);
-  const salary = formatAdzunaSalary(j.salary_min, j.salary_max) || extractSalary(description);
+
+  // Two-step: clean raw text, then strip marketing fluff
+  const rawText = cleanRawText(j.description);
+  const description = extractRoleDescription(rawText, 500);
+
+  const salary = formatAdzunaSalary(j.salary_min, j.salary_max) || extractSalary(rawText);
   const id = makeJobId(company, title, location);
-  const scoring = scoreListing(title, description);
+
+  // Score using both title AND raw text (so we don't lose Series 7 mentions buried in fluff)
+  const scoring = scoreListing(title, rawText);
+
   return {
     id, title, company, location,
     summary: description,
@@ -161,7 +225,7 @@ function parseAdzunaJob(j) {
   };
 }
 
-// === LINKEDIN GUEST API ===
+// === LINKEDIN ===
 async function fetchLinkedIn(query, location) {
   const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&f_TPR=r86400&start=0`;
   try {
@@ -224,12 +288,8 @@ function formatDate(dateStr) {
   }
 }
 
-// === MERGE STRATEGY ===
-// When the same job comes from multiple sources (LinkedIn + Adzuna), prefer Adzuna
-// because it has descriptions and structured salary data
 function mergeListings(allJobs) {
   const merged = new Map();
-  // Process in order: Adzuna first (richer data wins), then LinkedIn
   const sorted = [...allJobs].sort((a, b) => {
     const priority = { Adzuna: 0, LinkedIn: 1, Indeed: 2 };
     return (priority[a.platform] ?? 99) - (priority[b.platform] ?? 99);
@@ -238,7 +298,6 @@ function mergeListings(allJobs) {
     if (!merged.has(job.id)) {
       merged.set(job.id, job);
     } else {
-      // Same job from a second source — fill in any missing fields
       const existing = merged.get(job.id);
       if (!existing.summary && job.summary) existing.summary = job.summary;
       if (!existing.salary && job.salary) existing.salary = job.salary;
@@ -260,10 +319,9 @@ const scrapeHandler = async (event, context) => {
     allJobs.push(...adzunaJobs, ...linkedinJobs);
   }
 
-  // Merge duplicates, preferring richer data
   const unique = mergeListings(allJobs);
 
-  // Re-score after merge (descriptions may have changed fit assessment)
+  // Re-score after merge using descriptions when available
   for (const job of unique) {
     if (job.summary) {
       const rescore = scoreListing(job.title, job.summary);
@@ -273,7 +331,6 @@ const scrapeHandler = async (event, context) => {
     }
   }
 
-  // Sort: HIGH first, then MED, then LOW; within each, newest first
   const fitOrder = { HIGH: 0, MED: 1, LOW: 2 };
   unique.sort((a, b) => {
     const fitDiff = fitOrder[a.fit] - fitOrder[b.fit];
@@ -281,7 +338,7 @@ const scrapeHandler = async (event, context) => {
     return (b.scrapedAt || "").localeCompare(a.scrapedAt || "");
   });
 
-  console.log(`Returning ${unique.length} unique listings (${unique.filter(j => j.summary).length} with descriptions, ${unique.filter(j => j.salary).length} with salary)`);
+  console.log(`Returning ${unique.length} unique listings`);
 
   return {
     statusCode: 200,
