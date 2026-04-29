@@ -1,107 +1,80 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 
-// === STORAGE KEYS ===
 const STORAGE = {
   applied: "matt_jobs_applied_v2",
   hidden: "matt_jobs_hidden_v2",
-  viewed: "matt_jobs_viewed_v2",      // { jobId: timestampISO }
-  prefs: "matt_jobs_prefs_v2",        // { minSalary, workType, theme }
+  viewed: "matt_jobs_viewed_v2",
+  prefs: "matt_jobs_prefs_v2",
 };
 
 const DEFAULT_PREFS = {
-  minSalary: 70,           // in $k
-  workType: "all",         // all | hybrid | remote | onsite
-  theme: "dark",           // dark | light
+  minSalary: 70,
+  workType: "all",
+  theme: "dark",
 };
 
 function loadStorage(key, fallback) {
-  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; }
-  catch { return fallback; }
+  try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
 }
 function saveStorage(key, data) {
   try { localStorage.setItem(key, JSON.stringify(data)); } catch {}
 }
 
-// === THEME ===
 const THEMES = {
   dark: {
-    bg: "#0a0a0b",
-    cardBg: "#111114",
-    cardBgApplied: "#0d1410",
-    cardBgViewed: "#0d0d10",
-    border: "#1c1c20",
-    borderHover: "#2a2a30",
-    borderApplied: "#1f4d2e",
-    text: "#f0f0f5",
-    textDim: "#7a7a85",
-    textMuted: "#4a4a52",
-    accent: "#4ade80",
-    accentSoft: "#0a2416",
-    blue: "#60a5fa",
-    blueBg: "#0f1a30",
-    blueBorder: "#1e3a5f",
-    yellow: "#fbbf24",
-    red: "#f87171",
-    redBg: "#1a0a0a",
+    bg: "#0a0a0b", cardBg: "#111114", cardBgApplied: "#0d1410", cardBgViewed: "#0d0d10",
+    border: "#1c1c20", borderHover: "#2a2a30", borderApplied: "#1f4d2e",
+    text: "#f0f0f5", textDim: "#7a7a85", textMuted: "#4a4a52",
+    accent: "#4ade80", accentSoft: "#0a2416",
+    blue: "#60a5fa", blueBg: "#0f1a30", blueBorder: "#1e3a5f",
+    purple: "#a78bfa", purpleBg: "#1a1230", purpleBorder: "#4c3a7a",
+    yellow: "#fbbf24", red: "#f87171", redBg: "#1a0a0a",
     panelBg: "#0d0d10",
   },
   light: {
-    bg: "#f8f9fb",
-    cardBg: "#ffffff",
-    cardBgApplied: "#f0fdf4",
-    cardBgViewed: "#f8f8fb",
-    border: "#e5e7eb",
-    borderHover: "#cbd5e1",
-    borderApplied: "#86efac",
-    text: "#111827",
-    textDim: "#6b7280",
-    textMuted: "#9ca3af",
-    accent: "#16a34a",
-    accentSoft: "#dcfce7",
-    blue: "#2563eb",
-    blueBg: "#dbeafe",
-    blueBorder: "#93c5fd",
-    yellow: "#d97706",
-    red: "#dc2626",
-    redBg: "#fef2f2",
+    bg: "#f8f9fb", cardBg: "#ffffff", cardBgApplied: "#f0fdf4", cardBgViewed: "#f8f8fb",
+    border: "#e5e7eb", borderHover: "#cbd5e1", borderApplied: "#86efac",
+    text: "#111827", textDim: "#6b7280", textMuted: "#9ca3af",
+    accent: "#16a34a", accentSoft: "#dcfce7",
+    blue: "#2563eb", blueBg: "#dbeafe", blueBorder: "#93c5fd",
+    purple: "#7c3aed", purpleBg: "#ede9fe", purpleBorder: "#c4b5fd",
+    yellow: "#d97706", red: "#dc2626", redBg: "#fef2f2",
     panelBg: "#ffffff",
   },
 };
 
 const FIT_COLORS = {
   HIGH: { dark: "#4ade80", light: "#16a34a" },
-  MED:  { dark: "#fbbf24", light: "#d97706" },
-  LOW:  { dark: "#f87171", light: "#dc2626" },
+  MED: { dark: "#fbbf24", light: "#d97706" },
+  LOW: { dark: "#f87171", light: "#dc2626" },
 };
 
-// === BADGE STATUS for "Today/Updated/Viewed" ===
+const CATEGORY_LABELS = {
+  finance_adjacent: "🏦 Finance Adjacent",
+  fintech_tech: "🚀 Fintech / Tech",
+  high_trust: "⚡ High Trust / Growth",
+};
+
 function getJobStatus(job, viewedMap) {
-  const viewed = viewedMap[job.id];
-  if (viewed) return "viewed";
-
-  // New today: posted within last 24h
-  const postedRecent = /\b(just now|hour|today|0d|1h|2h|3h|4h|5h|6h|7h|8h|9h|10h|11h|12h|13h|14h|15h|16h|17h|18h|19h|20h|21h|22h|23h)\b/i.test(job.posted || "");
+  if (viewedMap[job.id]) return "viewed";
+  const postedRecent = /\b(just now|today|0d|1h|2h|3h|4h|5h|6h|7h|8h|9h|10h|11h|12h|13h|14h|15h|16h|17h|18h|19h|20h|21h|22h|23h)\b/i.test(job.posted || "");
   if (postedRecent) return "new";
-
   return "updated";
 }
 
 function StatusBadge({ status, theme }) {
   const c = THEMES[theme];
-  const configs = {
-    new: { label: "🟢 NEW TODAY", bg: c.accentSoft, color: c.accent, border: c.accent },
+  const cfg = {
+    new: { label: "🟢 NEW", bg: c.accentSoft, color: c.accent, border: c.accent },
     updated: { label: "🔁 UPDATED", bg: c.blueBg, color: c.blue, border: c.blueBorder },
     viewed: { label: "👀 VIEWED", bg: "transparent", color: c.textMuted, border: c.border },
-  };
-  const cfg = configs[status];
+  }[status];
   return (
     <span style={{
       background: cfg.bg, color: cfg.color, border: `1px solid ${cfg.border}`,
       borderRadius: 4, padding: "2px 7px", fontSize: 9, fontWeight: 700,
       letterSpacing: "0.08em", fontFamily: "'JetBrains Mono', monospace"
-    }}>
-      {cfg.label}
-    </span>
+    }}>{cfg.label}</span>
   );
 }
 
@@ -118,9 +91,21 @@ function FitBadge({ fit, theme }) {
   );
 }
 
+function CategoryTag({ category, theme }) {
+  const c = THEMES[theme];
+  const label = CATEGORY_LABELS[category];
+  if (!label) return null;
+  return (
+    <span style={{
+      background: c.purpleBg, color: c.purple, border: `1px solid ${c.purpleBorder}`,
+      borderRadius: 4, padding: "2px 8px", fontSize: 10, fontWeight: 600,
+      letterSpacing: "0.04em"
+    }}>{label}</span>
+  );
+}
+
 function MatchScore({ score, theme }) {
   const c = THEMES[theme];
-  // Color tier: 80+ green, 60-79 yellow, <60 red
   const color = score >= 80 ? c.accent : score >= 60 ? c.yellow : c.red;
   return (
     <div style={{
@@ -140,22 +125,17 @@ function JobCard({ job, isApplied, isHidden, status, theme, onApply, onHide, onU
   const [hover, setHover] = useState(false);
   const c = THEMES[theme];
   const fitColor = FIT_COLORS[job.fit]?.[theme] || c.textMuted;
+  const isExpanded = job.lane === "expanded";
 
-  const handleApplyClick = (e) => {
-    onView(job);
-    // Don't prevent default — let the link open
-  };
-
-  const cardBg = isApplied ? c.cardBgApplied : (status === "viewed" ? c.cardBgViewed : c.cardBg);
-  const cardBorder = isApplied ? c.borderApplied : (hover ? c.borderHover : c.border);
+  const handleApplyClick = () => onView(job);
 
   return (
     <div
       onMouseEnter={() => setHover(true)}
       onMouseLeave={() => setHover(false)}
       style={{
-        background: cardBg,
-        border: `1px solid ${cardBorder}`,
+        background: isApplied ? c.cardBgApplied : (status === "viewed" ? c.cardBgViewed : c.cardBg),
+        border: `1px solid ${isApplied ? c.borderApplied : (hover ? c.borderHover : c.border)}`,
         borderLeft: `3px solid ${fitColor}`,
         borderRadius: 10, marginBottom: 12, overflow: "hidden",
         transition: "all 0.18s ease",
@@ -165,44 +145,38 @@ function JobCard({ job, isApplied, isHidden, status, theme, onApply, onHide, onU
     >
       <div style={{ padding: "16px 18px", display: "flex", gap: 14, alignItems: "flex-start" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          {/* Top row: badges */}
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 7, alignItems: "center" }}>
             <StatusBadge status={status} theme={theme} />
             <FitBadge fit={job.fit} theme={theme} />
+            {isExpanded && job.expandedCategory && <CategoryTag category={job.expandedCategory} theme={theme} />}
             <span style={{ color: c.textMuted, fontSize: 10, fontFamily: "'JetBrains Mono', monospace" }}>{job.platform}</span>
             <span style={{ color: c.textMuted, fontSize: 10 }}>· {job.posted}</span>
             {isApplied && <span style={{ color: c.accent, fontSize: 10, fontWeight: 700 }}>✓ APPLIED</span>}
           </div>
-
-          {/* Title */}
-          <div style={{ color: c.text, fontWeight: 600, fontSize: 15, marginBottom: 3, lineHeight: 1.3, letterSpacing: "-0.01em" }}>
-            {job.title}
-          </div>
+          <div style={{ color: c.text, fontWeight: 600, fontSize: 15, marginBottom: 3, lineHeight: 1.3, letterSpacing: "-0.01em" }}>{job.title}</div>
           <div style={{ color: c.textDim, fontSize: 12.5, marginBottom: 8 }}>
             {job.company}{job.location ? ` · ${job.location}` : ""}
           </div>
-
-          {/* Match + Salary row */}
           <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap", marginBottom: job.fitReason ? 8 : 0 }}>
             {job.matchScore && <MatchScore score={job.matchScore} theme={theme} />}
             {job.salary && (
-              <span style={{
-                color: fitColor, fontSize: 12, fontWeight: 600,
-                fontFamily: "'JetBrains Mono', monospace"
-              }}>
+              <span style={{ color: fitColor, fontSize: 12, fontWeight: 600, fontFamily: "'JetBrains Mono', monospace" }}>
                 💰 {job.salary}
               </span>
             )}
           </div>
-
           {job.fitReason && (
-            <div style={{ color: c.textMuted, fontSize: 11, fontStyle: "italic", lineHeight: 1.5 }}>
+            <div style={{
+              color: isExpanded ? c.purple : c.textMuted,
+              fontSize: 11.5, fontStyle: isExpanded ? "normal" : "italic",
+              lineHeight: 1.5,
+              fontWeight: isExpanded ? 500 : 400
+            }}>
+              {isExpanded && <span style={{ fontWeight: 700, marginRight: 4 }}>Why it fits:</span>}
               {job.fitReason}
             </div>
           )}
         </div>
-
-        {/* Action buttons */}
         <div style={{ display: "flex", flexDirection: "column", gap: 6, flexShrink: 0 }}>
           {job.applyUrl && (
             <a href={job.applyUrl} target="_blank" rel="noreferrer" onClick={handleApplyClick}
@@ -211,7 +185,6 @@ function JobCard({ job, isApplied, isHidden, status, theme, onApply, onHide, onU
                 color: fitColor, border: `1px solid ${fitColor}50`,
                 borderRadius: 6, padding: "6px 13px", fontSize: 11.5, fontWeight: 600,
                 textDecoration: "none", textAlign: "center", whiteSpace: "nowrap",
-                transition: "all 0.15s"
               }}>Apply →</a>
           )}
           {!isHidden && (
@@ -220,7 +193,7 @@ function JobCard({ job, isApplied, isHidden, status, theme, onApply, onHide, onU
               border: `1px solid ${isApplied ? c.accent : c.border}`,
               color: isApplied ? c.accent : c.textDim,
               borderRadius: 6, padding: "6px 13px", fontSize: 11.5, fontWeight: 500,
-              cursor: "pointer", whiteSpace: "nowrap", transition: "all 0.15s"
+              cursor: "pointer", whiteSpace: "nowrap"
             }}>{isApplied ? "Applied ✓" : "Mark Applied"}</button>
           )}
           {isHidden ? (
@@ -250,12 +223,30 @@ function JobCard({ job, isApplied, isHidden, status, theme, onApply, onHide, onU
           )}
           {job.keyMatch?.length > 0 && (
             <div style={{ marginBottom: 14 }}>
-              <div style={{ color: c.textMuted, fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 7 }}>Why You Match</div>
+              <div style={{ color: c.textMuted, fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 7 }}>
+                {isExpanded ? "Skill Matches" : "Why You Match"}
+              </div>
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {job.keyMatch.map((m, i) => (
                   <span key={i} style={{
                     background: theme === "dark" ? "#1a1a1f" : "#f1f5f9",
                     border: `1px solid ${c.border}`, color: c.textDim,
+                    borderRadius: 4, padding: "3px 9px", fontSize: 11
+                  }}>{m}</span>
+                ))}
+              </div>
+            </div>
+          )}
+          {isExpanded && job.missingSkills?.length > 0 && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ color: c.yellow, fontSize: 9, fontWeight: 700, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 7 }}>
+                ⚠ Possible Gaps
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {job.missingSkills.map((m, i) => (
+                  <span key={i} style={{
+                    background: theme === "dark" ? "#1a1500" : "#fef3c7",
+                    border: `1px solid ${c.yellow}40`, color: c.yellow,
                     borderRadius: 4, padding: "3px 9px", fontSize: 11
                   }}>{m}</span>
                 ))}
@@ -276,17 +267,18 @@ function JobCard({ job, isApplied, isHidden, status, theme, onApply, onHide, onU
 function HistoryRow({ entry, onAction, color, dateLabel, theme }) {
   const c = THEMES[theme];
   const fitColor = FIT_COLORS[entry.fit]?.[theme] || c.textMuted;
-  const accentColor = color === "green" ? c.accent : c.red;
+  const accent = color === "green" ? c.accent : c.red;
   return (
     <div style={{
       background: c.cardBg, border: `1px solid ${c.border}`,
-      borderLeft: `3px solid ${accentColor}`, borderRadius: 8,
+      borderLeft: `3px solid ${accent}`, borderRadius: 8,
       padding: "13px 15px", marginBottom: 9,
       display: "flex", alignItems: "center", gap: 12
     }}>
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap", marginBottom: 4 }}>
           <FitBadge fit={entry.fit} theme={theme} />
+          {entry.expandedCategory && <CategoryTag category={entry.expandedCategory} theme={theme} />}
           {color === "green"
             ? <span style={{ color: c.accent, fontSize: 10, fontWeight: 700 }}>✓ APPLIED</span>
             : <span style={{ color: c.red, fontSize: 10, fontWeight: 700 }}>✗ NOT INTERESTED</span>}
@@ -298,8 +290,8 @@ function HistoryRow({ entry, onAction, color, dateLabel, theme }) {
       </div>
       {entry.applyUrl && (
         <a href={entry.applyUrl} target="_blank" rel="noreferrer" style={{
-          background: "transparent", border: `1px solid ${accentColor}40`,
-          color: accentColor, borderRadius: 5, padding: "4px 11px",
+          background: "transparent", border: `1px solid ${accent}40`,
+          color: accent, borderRadius: 5, padding: "4px 11px",
           fontSize: 10.5, textDecoration: "none", whiteSpace: "nowrap"
         }}>View</a>
       )}
@@ -315,11 +307,8 @@ function HistoryRow({ entry, onAction, color, dateLabel, theme }) {
 function SettingsPanel({ open, onClose, prefs, onSave, theme }) {
   const c = THEMES[theme];
   const [draft, setDraft] = useState(prefs);
-
   useEffect(() => { setDraft(prefs); }, [prefs, open]);
-
   if (!open) return null;
-
   return (
     <div onClick={onClose} style={{
       position: "fixed", inset: 0, background: "rgba(0,0,0,0.6)",
@@ -329,11 +318,10 @@ function SettingsPanel({ open, onClose, prefs, onSave, theme }) {
       <div onClick={e => e.stopPropagation()} style={{
         background: c.panelBg, border: `1px solid ${c.border}`,
         borderRadius: 12, padding: 22, maxWidth: 440, width: "100%",
-        boxShadow: theme === "dark" ? "0 20px 60px rgba(0,0,0,0.5)" : "0 20px 60px rgba(0,0,0,0.15)"
       }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 18 }}>
           <div>
-            <div style={{ color: c.text, fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em" }}>Preferences</div>
+            <div style={{ color: c.text, fontSize: 16, fontWeight: 700 }}>Preferences</div>
             <div style={{ color: c.textMuted, fontSize: 11.5, marginTop: 2 }}>Saved to this browser</div>
           </div>
           <button onClick={onClose} style={{
@@ -341,28 +329,19 @@ function SettingsPanel({ open, onClose, prefs, onSave, theme }) {
             color: c.textDim, borderRadius: 5, padding: "4px 10px", fontSize: 11, cursor: "pointer"
           }}>Close</button>
         </div>
-
-        {/* Salary minimum */}
         <div style={{ marginBottom: 20 }}>
           <label style={{ display: "block", color: c.textDim, fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
             Minimum Salary (k)
           </label>
-          <input
-            type="range" min="40" max="250" step="10"
-            value={draft.minSalary}
+          <input type="range" min="40" max="250" step="10" value={draft.minSalary}
             onChange={e => setDraft({ ...draft, minSalary: parseInt(e.target.value) })}
-            style={{ width: "100%", accentColor: c.accent }}
-          />
+            style={{ width: "100%", accentColor: c.accent }} />
           <div style={{ color: c.text, fontSize: 18, fontWeight: 700, marginTop: 4, fontFamily: "'JetBrains Mono', monospace" }}>
             ${draft.minSalary}k+
           </div>
         </div>
-
-        {/* Work type */}
         <div style={{ marginBottom: 20 }}>
-          <label style={{ display: "block", color: c.textDim, fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
-            Work Type
-          </label>
+          <label style={{ display: "block", color: c.textDim, fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Work Type</label>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {[["all", "All"], ["onsite", "On-site"], ["hybrid", "Hybrid"], ["remote", "Remote"]].map(([val, label]) => (
               <button key={val} onClick={() => setDraft({ ...draft, workType: val })} style={{
@@ -374,12 +353,8 @@ function SettingsPanel({ open, onClose, prefs, onSave, theme }) {
             ))}
           </div>
         </div>
-
-        {/* Theme */}
         <div style={{ marginBottom: 24 }}>
-          <label style={{ display: "block", color: c.textDim, fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>
-            Theme
-          </label>
+          <label style={{ display: "block", color: c.textDim, fontSize: 11, fontWeight: 600, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Theme</label>
           <div style={{ display: "flex", gap: 6 }}>
             {[["dark", "🌙 Dark"], ["light", "☀️ Light"]].map(([val, label]) => (
               <button key={val} onClick={() => setDraft({ ...draft, theme: val })} style={{
@@ -391,7 +366,6 @@ function SettingsPanel({ open, onClose, prefs, onSave, theme }) {
             ))}
           </div>
         </div>
-
         <button onClick={() => { onSave(draft); onClose(); }} style={{
           width: "100%", background: c.blueBg, border: `1px solid ${c.blueBorder}`,
           color: c.blue, borderRadius: 8, padding: "12px 0",
@@ -403,12 +377,14 @@ function SettingsPanel({ open, onClose, prefs, onSave, theme }) {
 }
 
 export default function App() {
-  const [tab, setTab] = useState("active");
-  const [jobs, setJobs] = useState([]);
+  const [lane, setLane] = useState("wm");                 // wm | expanded
+  const [tab, setTab] = useState("active");                // active | applied | hidden
+  const [data, setData] = useState({ wm: [], expanded: [] });
   const [lastUpdated, setLastUpdated] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [filter, setFilter] = useState("ALL");
+  const [categoryFilter, setCategoryFilter] = useState("ALL");
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const [applied, setApplied] = useState(() => loadStorage(STORAGE.applied, {}));
@@ -425,9 +401,14 @@ export default function App() {
     try {
       const res = await fetch(`/api/jobs?t=${Date.now()}`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      setJobs(data.jobs || []);
-      setLastUpdated(data.lastUpdated);
+      const d = await res.json();
+      // Backwards compat: if old API still returns `jobs` array, treat as WM
+      if (d.jobs && !d.wm) {
+        setData({ wm: d.jobs, expanded: [] });
+      } else {
+        setData({ wm: d.wm || [], expanded: d.expanded || [] });
+      }
+      setLastUpdated(d.lastUpdated);
     } catch (e) {
       setError(e.message);
     } finally {
@@ -443,85 +424,67 @@ export default function App() {
       delete next[job.id];
     } else {
       next[job.id] = {
-        id: job.id, title: job.title, company: job.company,
-        location: job.location, fit: job.fit, applyUrl: job.applyUrl,
-        platform: job.platform, salary: job.salary,
+        id: job.id, title: job.title, company: job.company, location: job.location,
+        fit: job.fit, applyUrl: job.applyUrl, platform: job.platform, salary: job.salary,
+        lane: job.lane, expandedCategory: job.expandedCategory,
         dateApplied: new Date().toLocaleDateString(),
       };
     }
-    setApplied(next);
-    saveStorage(STORAGE.applied, next);
-  };
-
-  const unapply = (id) => {
-    const next = { ...applied }; delete next[id];
     setApplied(next); saveStorage(STORAGE.applied, next);
   };
-
+  const unapply = (id) => { const n = { ...applied }; delete n[id]; setApplied(n); saveStorage(STORAGE.applied, n); };
   const hide = (job) => {
     const next = { ...hidden };
     next[job.id] = {
-      id: job.id, title: job.title, company: job.company,
-      location: job.location, fit: job.fit, applyUrl: job.applyUrl,
-      platform: job.platform, salary: job.salary,
+      id: job.id, title: job.title, company: job.company, location: job.location,
+      fit: job.fit, applyUrl: job.applyUrl, platform: job.platform, salary: job.salary,
+      lane: job.lane, expandedCategory: job.expandedCategory,
       dateHidden: new Date().toLocaleDateString(),
     };
     setHidden(next); saveStorage(STORAGE.hidden, next);
   };
-
   const unhide = (jobOrId) => {
     const id = typeof jobOrId === "string" ? jobOrId : jobOrId.id;
-    const next = { ...hidden }; delete next[id];
-    setHidden(next); saveStorage(STORAGE.hidden, next);
+    const n = { ...hidden }; delete n[id]; setHidden(n); saveStorage(STORAGE.hidden, n);
   };
-
   const markViewed = (job) => {
     if (viewed[job.id]) return;
-    const next = { ...viewed, [job.id]: new Date().toISOString() };
-    setViewed(next); saveStorage(STORAGE.viewed, next);
+    const n = { ...viewed, [job.id]: new Date().toISOString() };
+    setViewed(n); saveStorage(STORAGE.viewed, n);
   };
+  const savePrefs = (p) => { setPrefs(p); saveStorage(STORAGE.prefs, p); };
 
-  const savePrefs = (newPrefs) => {
-    setPrefs(newPrefs); saveStorage(STORAGE.prefs, newPrefs);
-  };
-
-  // === SALARY FILTER ===
   const meetsSalary = (job) => {
-    if (!job.salary) return true; // unknown = include
+    if (!job.salary) return true;
     const m = job.salary.match(/\$?(\d+)k/i);
     if (!m) return true;
     return parseInt(m[1]) >= prefs.minSalary;
   };
-
-  // === WORK TYPE FILTER ===
   const meetsWorkType = (job) => {
     if (prefs.workType === "all") return true;
-    const loc = (job.location || "").toLowerCase();
-    const text = `${loc} ${(job.summary || "").toLowerCase()}`;
+    const text = `${(job.location || "").toLowerCase()} ${(job.summary || "").toLowerCase()}`;
     if (prefs.workType === "remote") return /\bremote\b/.test(text);
     if (prefs.workType === "hybrid") return /\bhybrid\b/.test(text);
     if (prefs.workType === "onsite") return !/\b(remote|hybrid)\b/.test(text);
     return true;
   };
 
-  // === ACTIVE FEED with sorting ===
+  const laneJobs = data[lane] || [];
+
   const activeFeed = useMemo(() => {
-    return jobs
+    return laneJobs
       .filter(j => !applied[j.id] && !hidden[j.id])
       .filter(meetsSalary)
       .filter(meetsWorkType)
+      .filter(j => categoryFilter === "ALL" || j.expandedCategory === categoryFilter)
       .map(j => ({ ...j, _status: getJobStatus(j, viewed) }))
       .sort((a, b) => {
-        // 1. Unseen ("new" or "updated") before "viewed"
-        const aViewed = a._status === "viewed";
-        const bViewed = b._status === "viewed";
-        if (aViewed !== bViewed) return aViewed ? 1 : -1;
-        // 2. New today before "updated"
+        const aV = a._status === "viewed", bV = b._status === "viewed";
+        if (aV !== bV) return aV ? 1 : -1;
         if (a._status !== b._status) return a._status === "new" ? -1 : 1;
-        // 3. Within group, by match score desc
         return (b.matchScore || 0) - (a.matchScore || 0);
       });
-  }, [jobs, applied, hidden, viewed, prefs]);
+  }, [laneJobs, applied, hidden, viewed, prefs, categoryFilter]);
 
   const fitFiltered = filter === "ALL" ? activeFeed : activeFeed.filter(j => j.fit === filter);
 
@@ -532,15 +495,26 @@ export default function App() {
     new: activeFeed.filter(j => j._status === "new").length,
   };
 
-  const appliedList = Object.values(applied).sort((a, b) => new Date(b.dateApplied) - new Date(a.dateApplied));
-  const hiddenList = Object.values(hidden).sort((a, b) => new Date(b.dateHidden) - new Date(a.dateHidden));
+  // Lane-scoped applied/hidden lists
+  const appliedList = Object.values(applied)
+    .filter(e => (e.lane || "wm") === lane)
+    .sort((a, b) => new Date(b.dateApplied) - new Date(a.dateApplied));
+  const hiddenList = Object.values(hidden)
+    .filter(e => (e.lane || "wm") === lane)
+    .sort((a, b) => new Date(b.dateHidden) - new Date(a.dateHidden));
+
+  const totalApplied = Object.keys(applied).length;
+  const totalViewed = Object.keys(viewed).length;
+
+  // Category filter options for Expanded lane
+  const categoryOptions = lane === "expanded"
+    ? [["ALL", activeFeed.length], ...Object.entries(CATEGORY_LABELS).map(([key, label]) => [key, laneJobs.filter(j => j.expandedCategory === key && !applied[j.id] && !hidden[j.id]).length])]
+    : null;
 
   return (
-    <div style={{
-      background: c.bg, minHeight: "100vh", color: c.text,
+    <div style={{ background: c.bg, minHeight: "100vh", color: c.text,
       fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-      transition: "background 0.2s"
-    }}>
+      transition: "background 0.2s" }}>
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
       <style>{`
         @keyframes spin { to { transform: rotate(360deg); } }
@@ -558,15 +532,12 @@ export default function App() {
       <div style={{
         borderBottom: `1px solid ${c.border}`, padding: "14px 18px",
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        position: "sticky", top: 0, background: c.bg, zIndex: 30,
-        backdropFilter: "blur(10px)"
+        position: "sticky", top: 0, background: c.bg, zIndex: 30, backdropFilter: "blur(10px)"
       }}>
         <div>
-          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "-0.01em", color: c.text }}>
-            Matt's Job Radar
-          </div>
+          <div style={{ fontSize: 14, fontWeight: 800, letterSpacing: "-0.01em", color: c.text }}>Matt's Job Radar</div>
           <div style={{ fontSize: 10, color: c.textMuted, fontFamily: "'JetBrains Mono', monospace", marginTop: 2 }}>
-            {jobs.length} listings · {appliedList.length} applied · {Object.keys(viewed).length} viewed
+            {data.wm.length + data.expanded.length} listings · {totalApplied} applied · {totalViewed} viewed
           </div>
         </div>
         <div style={{ display: "flex", gap: 6 }}>
@@ -590,10 +561,38 @@ export default function App() {
         </div>
       </div>
 
-      {/* Tabs */}
-      <div style={{ display: "flex", borderBottom: `1px solid ${c.border}`, background: c.bg, position: "sticky", top: 56, zIndex: 29 }}>
+      {/* === LANE TOGGLE === */}
+      <div style={{ display: "flex", gap: 8, padding: "16px 18px 0", maxWidth: 820, margin: "0 auto" }}>
         {[
-          ["active", "New", activeFeed.length, c.accent],
+          ["wm", "Wealth Management", data.wm.length, c.accent, c.accentSoft],
+          ["expanded", "Expanded Opportunities", data.expanded.length, c.purple, c.purpleBg],
+        ].map(([id, label, n, accent, bg]) => (
+          <button key={id} onClick={() => { setLane(id); setFilter("ALL"); setCategoryFilter("ALL"); setTab("active"); }} style={{
+            flex: 1, padding: "11px 16px",
+            background: lane === id ? bg : "transparent",
+            border: `1px solid ${lane === id ? accent : c.border}`,
+            color: lane === id ? accent : c.textDim,
+            borderRadius: 8,
+            fontSize: 12.5, fontWeight: lane === id ? 700 : 500,
+            cursor: "pointer",
+            display: "flex", alignItems: "center", justifyContent: "center", gap: 8,
+            transition: "all 0.18s"
+          }}>
+            <span>{label}</span>
+            <span style={{
+              background: lane === id ? `${accent}25` : (theme === "dark" ? "#1a1a1f" : "#f1f5f9"),
+              color: lane === id ? accent : c.textMuted,
+              borderRadius: 20, padding: "1px 7px", fontSize: 10, fontWeight: 700,
+              fontFamily: "'JetBrains Mono', monospace"
+            }}>{n}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* Status tabs */}
+      <div style={{ display: "flex", borderBottom: `1px solid ${c.border}`, background: c.bg, marginTop: 16 }}>
+        {[
+          ["active", "New", activeFeed.length, lane === "expanded" ? c.purple : c.accent],
           ["applied", "Applied", appliedList.length, c.accent],
           ["hidden", "Not Interested", hiddenList.length, c.red],
         ].map(([id, label, n, accent]) => (
@@ -603,11 +602,10 @@ export default function App() {
             color: tab === id ? c.text : c.textDim,
             fontSize: 12, fontWeight: tab === id ? 700 : 500,
             cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7,
-            transition: "all 0.15s"
           }}>
             {label}
             <span style={{
-              background: tab === id ? (accent === c.accent ? c.accentSoft : c.redBg) : (theme === "dark" ? "#1a1a1f" : "#f1f5f9"),
+              background: tab === id ? `${accent}20` : (theme === "dark" ? "#1a1a1f" : "#f1f5f9"),
               color: tab === id ? accent : c.textMuted,
               border: `1px solid ${tab === id ? accent : c.border}40`,
               borderRadius: 20, padding: "0 7px", fontSize: 9.5, fontWeight: 700,
@@ -618,15 +616,13 @@ export default function App() {
       </div>
 
       <div style={{ maxWidth: 820, margin: "0 auto", padding: "20px 16px 60px" }}>
-
-        {/* Status row */}
         {lastUpdated && (
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: c.accent, boxShadow: `0 0 6px ${c.accent}` }} />
-            <span style={{ color: c.accent, fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: lane === "expanded" ? c.purple : c.accent, boxShadow: `0 0 6px ${lane === "expanded" ? c.purple : c.accent}` }} />
+            <span style={{ color: lane === "expanded" ? c.purple : c.accent, fontSize: 11, fontFamily: "'JetBrains Mono', monospace" }}>
               {new Date(lastUpdated).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}
             </span>
-            {counts.new > 0 && (
+            {counts.new > 0 && tab === "active" && (
               <span style={{ color: c.accent, fontSize: 11, fontWeight: 700 }}>· {counts.new} new today</span>
             )}
             <span style={{ color: c.textMuted, fontSize: 11 }}>· auto-refreshes 8 AM & 4 PM</span>
@@ -646,7 +642,21 @@ export default function App() {
 
         {tab === "active" && (
           <>
-            {jobs.length > 0 && (
+            {/* Category filter for Expanded lane */}
+            {lane === "expanded" && categoryOptions && (
+              <div style={{ display: "flex", gap: 6, marginBottom: 12, flexWrap: "wrap" }}>
+                {categoryOptions.map(([key, n]) => (
+                  <button key={key} onClick={() => setCategoryFilter(key)} style={{
+                    background: categoryFilter === key ? c.purpleBg : "transparent",
+                    border: `1px solid ${categoryFilter === key ? c.purpleBorder : c.border}`,
+                    color: categoryFilter === key ? c.purple : c.textDim,
+                    borderRadius: 6, padding: "5px 11px", fontSize: 11, fontWeight: 600, cursor: "pointer"
+                  }}>{key === "ALL" ? `All ${n}` : `${CATEGORY_LABELS[key]} ${n}`}</button>
+                ))}
+              </div>
+            )}
+
+            {laneJobs.length > 0 && (
               <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
                 {[["ALL", activeFeed.length], ["HIGH", counts.HIGH], ["MED", counts.MED], ["LOW", counts.LOW]].map(([f, n]) => (
                   <button key={f} onClick={() => setFilter(f)} style={{
@@ -662,35 +672,37 @@ export default function App() {
               </div>
             )}
 
-            {loading && jobs.length === 0 && (
+            {loading && data.wm.length === 0 && data.expanded.length === 0 && (
               <div style={{ textAlign: "center", padding: "80px 0" }}>
                 <div style={{ width: 22, height: 22, border: `2px solid ${c.border}`, borderTopColor: c.accent, borderRadius: "50%", animation: "spin 0.8s linear infinite", margin: "0 auto 16px" }} />
-                <div style={{ color: c.textMuted, fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>Loading listings...</div>
+                <div style={{ color: c.textMuted, fontSize: 12, fontFamily: "'JetBrains Mono', monospace" }}>Loading both lanes...</div>
               </div>
             )}
 
-            {!loading && fitFiltered.length === 0 && jobs.length > 0 && (
+            {!loading && fitFiltered.length === 0 && laneJobs.length > 0 && (
               <div style={{ textAlign: "center", padding: "60px 0", color: c.textMuted, fontSize: 13 }}>
-                No new {filter !== "ALL" ? filter : ""} listings.
+                No matching listings.
                 <div style={{ color: c.textMuted, fontSize: 11, marginTop: 6, opacity: 0.7 }}>
                   Try adjusting your preferences (⚙ top right)
                 </div>
               </div>
             )}
 
+            {!loading && laneJobs.length === 0 && lane === "expanded" && (
+              <div style={{ textAlign: "center", padding: "60px 0", color: c.textMuted, fontSize: 13 }}>
+                No expanded opportunities yet.
+                <div style={{ color: c.textMuted, fontSize: 11, marginTop: 6, opacity: 0.7 }}>
+                  Next scan runs at 8 AM. Click REFRESH to pull fresh listings now.
+                </div>
+              </div>
+            )}
+
             {fitFiltered.map(job => (
               <div key={job.id} style={{ animation: "fadeIn 0.25s ease" }}>
-                <JobCard
-                  job={job}
-                  isApplied={!!applied[job.id]}
-                  isHidden={!!hidden[job.id]}
-                  status={job._status}
-                  theme={theme}
-                  onApply={markApplied}
-                  onHide={hide}
-                  onUnhide={unhide}
-                  onView={markViewed}
-                />
+                <JobCard job={job}
+                  isApplied={!!applied[job.id]} isHidden={!!hidden[job.id]}
+                  status={job._status} theme={theme}
+                  onApply={markApplied} onHide={hide} onUnhide={unhide} onView={markViewed} />
               </div>
             ))}
           </>
@@ -700,7 +712,7 @@ export default function App() {
           <>
             {appliedList.length === 0 ? (
               <div style={{ textAlign: "center", padding: "80px 0", color: c.textMuted, fontSize: 13 }}>
-                No applications tracked yet.
+                No {lane === "expanded" ? "Expanded" : "WM"} applications tracked yet.
               </div>
             ) : (
               <>
@@ -719,7 +731,7 @@ export default function App() {
           <>
             {hiddenList.length === 0 ? (
               <div style={{ textAlign: "center", padding: "80px 0", color: c.textMuted, fontSize: 13 }}>
-                Nothing marked Not Interested.
+                Nothing marked Not Interested in this lane.
               </div>
             ) : (
               <>
