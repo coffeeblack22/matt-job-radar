@@ -396,6 +396,23 @@ const CSS = `
     color: #ef9a9a;
   }
   .btn-decline:hover { background: rgba(239, 154, 154, 0.1); }
+  /* Interested button - amber tone, sits between primary green and red decline */
+  .btn-interested {
+    background: rgba(245, 184, 73, 0.08);
+    border-color: rgba(245, 184, 73, 0.32);
+    color: #f5b849;
+  }
+  .btn-interested:hover { background: rgba(245, 184, 73, 0.14); transform: translateY(-1px); }
+  /* Softer decline - matches palette for New cards (less aggressive than the Interested-tab decline) */
+  .btn-decline-soft {
+    background: rgba(255, 255, 255, 0.03);
+    border-color: rgba(239, 154, 154, 0.22);
+    color: rgba(239, 154, 154, 0.85);
+  }
+  .btn-decline-soft:hover {
+    background: rgba(239, 154, 154, 0.08);
+    color: #ef9a9a;
+  }
 
   /* ===== EXPANDED CARD DETAIL ===== */
   .card-detail {
@@ -429,7 +446,7 @@ const CSS = `
   .empty-text { color: #8a8d8b; font-size: 13px; margin-bottom: 6px; }
   .empty-sub { color: #6b6e6c; font-size: 11px; opacity: 0.8; }
 
-  /* ===== SPINNER ===== */
+  /* ===== SPINNER (kept for refresh button only) ===== */
   .spinner {
     width: 22px; height: 22px;
     border: 2px solid rgba(255,255,255,0.1);
@@ -439,6 +456,68 @@ const CSS = `
   }
   .spinner.small { width: 9px; height: 9px; border-width: 2px; vertical-align: middle; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ===== SKELETON LOADER - shimmer cards while data loads ===== */
+  .skel-card {
+    margin-bottom: 14px;
+    background: rgba(22, 26, 24, 0.55);
+    backdrop-filter: blur(24px) saturate(160%);
+    -webkit-backdrop-filter: blur(24px) saturate(160%);
+    border: 1px solid rgba(255,255,255,0.07);
+    border-radius: 22px;
+    padding: 16px 18px;
+    overflow: hidden; position: relative;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.05);
+  }
+  .skel-card::before {
+    content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: rgba(255,255,255,0.08);
+  }
+  .skel-line {
+    height: 11px;
+    background: linear-gradient(
+      90deg,
+      rgba(255,255,255,0.04) 0%,
+      rgba(255,255,255,0.09) 50%,
+      rgba(255,255,255,0.04) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+    border-radius: 6px;
+  }
+  .skel-line.title { height: 14px; width: 60%; margin-bottom: 8px; }
+  .skel-line.meta { height: 10px; width: 40%; margin-bottom: 14px; }
+  .skel-line.match { height: 22px; width: 90px; border-radius: 10px; margin-bottom: 10px; display: inline-block; }
+  .skel-line.salary { height: 14px; width: 90px; margin-left: 10px; display: inline-block; vertical-align: middle; }
+  .skel-line.reason { height: 11px; width: 75%; margin-bottom: 4px; }
+  .skel-line.reason.short { width: 50%; }
+  .skel-row {
+    display: flex; gap: 6px; margin-bottom: 10px; align-items: center;
+  }
+  .skel-pill {
+    height: 18px; width: 60px; border-radius: 6px;
+    background: linear-gradient(
+      90deg,
+      rgba(255,255,255,0.04) 0%,
+      rgba(255,255,255,0.09) 50%,
+      rgba(255,255,255,0.04) 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 1.6s ease-in-out infinite;
+  }
+  .skel-pill.short { width: 40px; }
+  .skel-pill.long { width: 80px; }
+  /* Stagger the shimmer animation across cards so it doesn't all pulse in unison */
+  .skel-card:nth-child(2) .skel-line,
+  .skel-card:nth-child(2) .skel-pill { animation-delay: 0.15s; }
+  .skel-card:nth-child(3) .skel-line,
+  .skel-card:nth-child(3) .skel-pill { animation-delay: 0.3s; }
+  .skel-card:nth-child(4) .skel-line,
+  .skel-card:nth-child(4) .skel-pill { animation-delay: 0.45s; }
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
 
   /* ===== MODAL ===== */
   .modal-overlay {
@@ -525,8 +604,31 @@ function MatchScore({ score }) {
   );
 }
 
+// Skeleton placeholder card - matches real card structure for smooth swap
+function SkeletonCard() {
+  return (
+    <div className="skel-card">
+      <div className="skel-row">
+        <div className="skel-pill short"></div>
+        <div className="skel-pill short"></div>
+        <div className="skel-pill long"></div>
+      </div>
+      <div className="skel-line title"></div>
+      <div className="skel-line meta"></div>
+      <div>
+        <div className="skel-line match"></div>
+        <div className="skel-line salary"></div>
+      </div>
+      <div style={{ marginTop: 12 }}>
+        <div className="skel-line reason"></div>
+        <div className="skel-line reason short"></div>
+      </div>
+    </div>
+  );
+}
+
 // === NEW TAB CARD ===
-function NewCard({ job, status, onApplyClick, onView }) {
+function NewCard({ job, status, onApplyClick, onMarkInterested, onMarkNotInterested, onView }) {
   const [open, setOpen] = useState(false);
   const isExpanded = job.lane === "expanded";
   const cls = `job-card fit-${job.fit || "MED"}${status === "viewed" ? " viewed" : ""}`;
@@ -568,6 +670,12 @@ function NewCard({ job, status, onApplyClick, onView }) {
               Apply →
             </a>
           )}
+          <button className="btn btn-interested" onClick={() => onMarkInterested(job)} title="Save to Interested">
+            ⏳ Interested
+          </button>
+          <button className="btn btn-decline-soft" onClick={() => onMarkNotInterested(job)} title="Move to Not Interested">
+            ✗ Not for me
+          </button>
           <button className="btn btn-secondary" onClick={() => setOpen(v => !v)}>
             {open ? "Less" : "More"}
           </button>
@@ -607,6 +715,11 @@ function NewCard({ job, status, onApplyClick, onView }) {
 function InterestedCard({ entry, onConfirmApplied, onDecline, onUndo }) {
   const cls = `job-card fit-${entry.fit || "MED"} interested-card`;
   const opened = formatRelative(entry.dateInterested);
+  const isManual = entry.source === "manual";
+  const promptText = isManual
+    ? "Saved for later. Ready to apply, or pass on this one?"
+    : "You opened this to apply. Did you actually submit?";
+  const labelText = isManual ? "saved" : "opened";
 
   return (
     <div className={cls}>
@@ -618,7 +731,7 @@ function InterestedCard({ entry, onConfirmApplied, onDecline, onUndo }) {
             {entry.expandedCategory && (
               <span className="badge badge-cat">{CATEGORY_LABELS[entry.expandedCategory]}</span>
             )}
-            <span className="badge-platform">opened {opened}</span>
+            <span className="badge-platform">{labelText} {opened}</span>
           </div>
           <div className="job-title">{entry.title}</div>
           <div className="job-meta">{entry.company}{entry.location ? ` · ${entry.location}` : ""}</div>
@@ -626,12 +739,17 @@ function InterestedCard({ entry, onConfirmApplied, onDecline, onUndo }) {
             {entry.matchScore && <MatchScore score={entry.matchScore} />}
             {entry.salary && <span className="salary">💰 {entry.salary}</span>}
           </div>
-          <div className="fit-reason prompt">Did you actually apply? Pick below.</div>
+          <div className="fit-reason prompt">{promptText}</div>
         </div>
         <div className="card-actions">
-          <button className="btn btn-confirm" onClick={() => onConfirmApplied(entry)}>✓ Yes I Applied</button>
+          {isManual && entry.applyUrl && (
+            <a className="btn btn-apply" href={entry.applyUrl} target="_blank" rel="noreferrer">Apply Now →</a>
+          )}
+          <button className="btn btn-confirm" onClick={() => onConfirmApplied(entry)}>
+            {isManual ? "✓ I Applied" : "✓ Yes I Applied"}
+          </button>
           <button className="btn btn-decline" onClick={() => onDecline(entry)}>Not for me</button>
-          {entry.applyUrl && (
+          {!isManual && entry.applyUrl && (
             <a className="btn btn-secondary" href={entry.applyUrl} target="_blank" rel="noreferrer">View Posting →</a>
           )}
           <button className="btn btn-secondary" onClick={() => onUndo(entry.id)}>↶ Undo</button>
@@ -775,12 +893,34 @@ export default function App() {
   useEffect(() => { fetchJobs(); }, [fetchJobs]);
 
   // === ACTIONS ===
-  // Click Apply on a New card → auto-route to Interested
+  // Click Apply on a New card → auto-route to Interested (source: apply_click)
   const routeToInterested = (job) => {
     if (interested[job.id] || applied[job.id]) return; // already routed/applied
     const next = { ...interested };
-    next[job.id] = snapshotJob(job, { dateInterested: new Date().toISOString() });
+    next[job.id] = snapshotJob(job, {
+      dateInterested: new Date().toISOString(),
+      source: "apply_click",
+    });
     setInterested(next); saveStorage(STORAGE.interested, next);
+  };
+
+  // Manual: click "Interested" button on New card → save to Interested (source: manual)
+  const markInterestedManual = (job) => {
+    if (interested[job.id] || applied[job.id]) return;
+    const next = { ...interested };
+    next[job.id] = snapshotJob(job, {
+      dateInterested: new Date().toISOString(),
+      source: "manual",
+    });
+    setInterested(next); saveStorage(STORAGE.interested, next);
+  };
+
+  // Manual: click "Not for me" button directly on New card → straight to Hidden
+  const markNotInterestedFromNew = (job) => {
+    if (hidden[job.id]) return;
+    const next = { ...hidden };
+    next[job.id] = snapshotJob(job, { dateHidden: new Date().toLocaleDateString() });
+    setHidden(next); saveStorage(STORAGE.hidden, next);
   };
 
   // Confirm: from Interested → Applied
@@ -976,10 +1116,12 @@ export default function App() {
             )}
 
             {loading && data.wm.length === 0 && data.expanded.length === 0 && (
-              <div className="empty-state">
-                <div className="spinner" style={{ marginBottom: 16 }} />
-                <div className="empty-text">Loading both lanes...</div>
-              </div>
+              <>
+                <SkeletonCard />
+                <SkeletonCard />
+                <SkeletonCard />
+                <SkeletonCard />
+              </>
             )}
 
             {!loading && fitFiltered.length === 0 && laneJobs.length > 0 && (
@@ -998,7 +1140,10 @@ export default function App() {
 
             {fitFiltered.map(job => (
               <NewCard key={job.id} job={job} status={job._status}
-                onApplyClick={routeToInterested} onView={markViewed} />
+                onApplyClick={routeToInterested}
+                onMarkInterested={markInterestedManual}
+                onMarkNotInterested={markNotInterestedFromNew}
+                onView={markViewed} />
             ))}
           </>
         )}
