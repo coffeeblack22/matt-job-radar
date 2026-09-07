@@ -5,8 +5,10 @@
 // === WM LANE searches ===
 const WM_SEARCHES = [
   { query: "wealth management associate", location: "New York, NY" },
-  { query: "financial advisor series 7", location: "New York, NY" },
+  { query: "registered client associate series 7", location: "New York, NY" },
   { query: "financial planning associate", location: "New York, NY" },
+  { query: "private client advisor", location: "New York, NY" },
+  { query: "equity compensation stock plan advisor", location: "New York, NY" },
   { query: "wealth management", location: "Remote" },
 ];
 
@@ -371,9 +373,14 @@ async function fetchAdzuna(query, location, errors = [], delayMs = 0) {
   if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
   const cleanLocation = location.split(",")[0].trim();
   // 14 days, not 3 — a 3-day window on a free tier returns almost nothing.
-  const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(query)}&where=${encodeURIComponent(cleanLocation)}&max_days_old=14&sort_by=date`;
+  const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=50&what=${encodeURIComponent(query)}&where=${encodeURIComponent(cleanLocation)}&max_days_old=14&sort_by=date`;
   try {
-    const res = await fetch(url, { headers: { "Accept": "application/json" } });
+    let res = await fetch(url, { headers: { "Accept": "application/json" } });
+    if (res.status === 429) {
+      // Rate limited — back off once and try again before giving up.
+      await new Promise((r) => setTimeout(r, 700));
+      res = await fetch(url, { headers: { "Accept": "application/json" } });
+    }
     if (!res.ok) { errors.push(`adzuna "${query}" HTTP ${res.status}`); return []; }
     const data = await res.json();
     return (data.results || []).map(parseAdzunaJob).filter(Boolean);
@@ -649,8 +656,11 @@ export const handler = async () => {
   const AI_DEADLINE = started + 5000; // leave ~5s for scoring inside a 10s function
   const errors = [];
 
-  const adzunaWM = WM_SEARCHES.map((s, i) => fetchAdzuna(s.query, s.location, errors, i * 120));
-  const adzunaExp = EXPANDED_SEARCHES.map((s, i) => fetchAdzuna(s.query, s.location, errors, i * 120));
+  // Adzuna's free tier rejects bursts. Space every query 300ms apart across
+  // both lanes rather than firing all of them simultaneously.
+  let slot = 0;
+  const adzunaWM = WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 300));
+  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 300));
   const ats = [
     ...GREENHOUSE_BOARDS.map((t) => fetchGreenhouse(t, errors)),
     ...LEVER_BOARDS.map((t) => fetchLever(t, errors)),
