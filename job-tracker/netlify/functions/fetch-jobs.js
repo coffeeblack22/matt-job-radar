@@ -605,7 +605,7 @@ Return ONLY a JSON array. No markdown, no preamble.`;
     },
     body: JSON.stringify({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 2000,
+      max_tokens: 1400,
       messages: [{ role: "user", content: prompt }],
     }),
   });
@@ -621,7 +621,7 @@ async function applyAIScores(jobs, apiKey, deadline, errors) {
   if (!apiKey) { errors.push("ANTHROPIC_API_KEY not set — using keyword scores"); return; }
   if (Date.now() > deadline) { errors.push("time budget exhausted — using keyword scores"); return; }
 
-  const BATCH = 12;
+  const BATCH = 8;
   const batches = [];
   for (let i = 0; i < jobs.length; i += BATCH) batches.push(jobs.slice(i, i + BATCH));
 
@@ -642,7 +642,9 @@ async function applyAIScores(jobs, apiKey, deadline, errors) {
       job.fitReason = item.reason;
       job.aiScored = true;
       if (item.gap) job.missingSkills = [item.gap];
-      job.fit = job.matchScore >= 80 ? "HIGH" : job.matchScore >= 60 ? "MED" : "LOW";
+      // Calibrated to observed output: the model tops out around 75-78 on a
+      // genuinely strong match, so 80 as a HIGH gate meant nothing ever cleared it.
+      job.fit = job.matchScore >= 70 ? "HIGH" : job.matchScore >= 50 ? "MED" : "LOW";
     }
   });
 }
@@ -786,8 +788,8 @@ export const handler = async () => {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   await Promise.all([
-    applyAIScores(wmCollapsed.slice(0, 36), apiKey, AI_DEADLINE, errors),
-    applyAIScores(expCollapsed.slice(0, 36), apiKey, AI_DEADLINE, errors),
+    applyAIScores(wmCollapsed.slice(0, 28), apiKey, AI_DEADLINE, errors),
+    applyAIScores(expCollapsed.slice(0, 28), apiKey, AI_DEADLINE, errors),
   ]);
 
   // Re-sort with AI scores, then drop the clear rejects. Anything the model
