@@ -437,6 +437,8 @@ function mergeListings(allJobs) {
 // boards.greenhouse.io/<token> in a browser first — if it loads, the token is good.
 const GREENHOUSE_BOARDS = [
   "carta", "betterment", "brex", "chime", "affirm",
+  "addepar1",  // verified — note the trailing 1, plain "addepar" 404s
+  "altruist",  // verified — Greenhouse, not Lever
 ];
 
 // All three previous tokens 404'd. Verify at jobs.lever.co/<token> before adding.
