@@ -1,7 +1,6 @@
 // netlify/functions/fetch-jobs.js
-// v3 — Two lanes: Wealth Management + Expanded Opportunities
+// v4 — HTTP on-demand. Adzuna + ATS boards (Greenhouse/Lever/Ashby) + AI scoring.
 
-import { schedule } from "@netlify/functions";
 
 // === WM LANE searches ===
 const WM_SEARCHES = [
@@ -396,49 +395,6 @@ function parseAdzunaJob(j) {
     rawText, // keep for scoring
   };
 }
-
-// === LINKEDIN ===
-async function fetchLinkedIn(query, location) {
-  const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&f_TPR=r86400&start=0`;
-  try {
-    const res = await fetch(url, { headers: { "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36" } });
-    if (!res.ok) return [];
-    const html = await res.text();
-    return parseLinkedInHTML(html);
-  } catch (e) { return []; }
-}
-
-function parseLinkedInHTML(html) {
-  const items = [];
-  const cardRegex = /<li[^>]*>[\s\S]*?<\/li>/g;
-  const cards = html.match(cardRegex) || [];
-  for (const card of cards) {
-    const titleMatch = card.match(/<h3[^>]*class="[^"]*base-search-card__title[^"]*"[^>]*>([\s\S]*?)<\/h3>/);
-    const companyMatch = card.match(/<h4[^>]*class="[^"]*base-search-card__subtitle[^"]*"[^>]*>([\s\S]*?)<\/h4>/);
-    const locationMatch = card.match(/<span[^>]*class="[^"]*job-search-card__location[^"]*"[^>]*>([\s\S]*?)<\/span>/);
-    const linkMatch = card.match(/<a[^>]*class="[^"]*base-card__full-link[^"]*"[^>]*href="([^"]+)"/);
-    const dateMatch = card.match(/<time[^>]*datetime="([^"]+)"/);
-    const salaryMatch = card.match(/<span[^>]*class="[^"]*job-search-card__salary[^"]*"[^>]*>([\s\S]*?)<\/span>/);
-    if (!titleMatch || !linkMatch) continue;
-    const title = decodeHtml(titleMatch[1].replace(/<[^>]+>/g, "").trim());
-    const company = decodeHtml((companyMatch?.[1] || "").replace(/<[^>]+>/g, "").trim()) || "Unknown";
-    const location = decodeHtml((locationMatch?.[1] || "").replace(/<[^>]+>/g, "").trim());
-    const url = linkMatch[1].split("?")[0];
-    const rawSalaryText = (salaryMatch?.[1] || "").replace(/<[^>]+>/g, "").trim();
-    const salary = rawSalaryText ? rawSalaryText.replace(/\s+/g, " ").slice(0, 50) : "";
-    items.push({
-      id: makeJobId(company, title, location),
-      title, company, location,
-      summary: "", applyUrl: url,
-      platform: "LinkedIn",
-      posted: dateMatch ? formatDate(dateMatch[1]) : "Recent",
-      salary, scrapedAt: new Date().toISOString(),
-      rawText: title,
-    });
-  }
-  return items;
-}
-
 function formatDate(dateStr) {
   try {
     const d = new Date(dateStr);
@@ -452,7 +408,7 @@ function formatDate(dateStr) {
 function mergeListings(allJobs) {
   const merged = new Map();
   const sorted = [...allJobs].sort((a, b) => {
-    const priority = { Adzuna: 0, LinkedIn: 1 };
+    const priority = { Greenhouse: 0, Lever: 0, Ashby: 0, Adzuna: 1 };
     return (priority[a.platform] ?? 99) - (priority[b.platform] ?? 99);
   });
   for (const job of sorted) {
@@ -465,34 +421,268 @@ function mergeListings(allJobs) {
     }
   }
   return Array.from(merged.values());
+
 }
 
-// === MAIN ===
-const scrapeHandler = async (event, context) => {
-  console.log("v3 scraper running at", new Date().toISOString());
+// ============================================================
+// ATS JOB BOARDS — stable public JSON, no scraping, no blocking
+// Edit these token lists to add/remove target companies.
+// A bad token fails softly and shows up in the response `errors` array.
+// ============================================================
 
-  // Pull both lanes in parallel
-  const wmRaw = [];
-  const expRaw = [];
+const GREENHOUSE_BOARDS = [
+  "addepar", "carta", "betterment", "ramp", "brex",
+  "plaid", "chime", "marqeta", "affirm",
+];
 
-  for (const search of WM_SEARCHES) {
-    const [a, l] = await Promise.all([
-      fetchAdzuna(search.query, search.location),
-      fetchLinkedIn(search.query, search.location),
-    ]);
-    wmRaw.push(...a, ...l);
+const LEVER_BOARDS = [
+  "altruist", "vanta", "mercury",
+];
+
+const ASHBY_BOARDS = [
+  "wealth", "arta-finance", "savvy",
+];
+
+const ATS_TITLE_FILTER = /\b(wealth|advisor|adviser|planning|planner|client|customer success|account executive|account manager|implementation|onboarding|solutions|relationship manager|partnerships|equity comp|stock plan|business development|operations associate|chief of staff)\b/i;
+
+async function fetchGreenhouse(token, errors) {
+  const url = `https://boards-api.greenhouse.io/v1/boards/${token}/jobs?content=true`;
+  try {
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) { errors.push(`greenhouse:${token} HTTP ${res.status}`); return []; }
+    const data = await res.json();
+    return (data.jobs || []).map((j) => {
+      const title = decodeHtml(j.title || "").trim();
+      if (!ATS_TITLE_FILTER.test(title)) return null;
+      const location = j.location?.name || "";
+      const rawText = cleanRawText(decodeHtml(j.content || ""));
+      return {
+        id: makeJobId(token, title, location),
+        title,
+        company: token.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+        location,
+        summary: extractRoleDescription(rawText, 500),
+        applyUrl: j.absolute_url,
+        platform: "Greenhouse",
+        posted: j.updated_at ? formatDate(j.updated_at) : "Recent",
+        salary: extractSalary(rawText),
+        scrapedAt: new Date().toISOString(),
+        rawText,
+      };
+    }).filter(Boolean);
+  } catch (e) {
+    errors.push(`greenhouse:${token} ${e.message}`);
+    return [];
   }
-  for (const search of EXPANDED_SEARCHES) {
-    const [a, l] = await Promise.all([
-      fetchAdzuna(search.query, search.location),
-      fetchLinkedIn(search.query, search.location),
-    ]);
-    expRaw.push(...a, ...l);
+}
+
+async function fetchLever(token, errors) {
+  const url = `https://api.lever.co/v0/postings/${token}?mode=json`;
+  try {
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) { errors.push(`lever:${token} HTTP ${res.status}`); return []; }
+    const data = await res.json();
+    return (Array.isArray(data) ? data : []).map((j) => {
+      const title = decodeHtml(j.text || "").trim();
+      if (!ATS_TITLE_FILTER.test(title)) return null;
+      const location = j.categories?.location || "";
+      const rawText = cleanRawText(decodeHtml(j.descriptionPlain || j.description || ""));
+      return {
+        id: makeJobId(token, title, location),
+        title,
+        company: token.replace(/-/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
+        location,
+        summary: extractRoleDescription(rawText, 500),
+        applyUrl: j.hostedUrl,
+        platform: "Lever",
+        posted: j.createdAt ? formatDate(new Date(j.createdAt).toISOString()) : "Recent",
+        salary: extractSalary(rawText),
+        scrapedAt: new Date().toISOString(),
+        rawText,
+      };
+    }).filter(Boolean);
+  } catch (e) {
+    errors.push(`lever:${token} ${e.message}`);
+    return [];
+  }
+}
+
+async function fetchAshby(token, errors) {
+  const url = `https://api.ashbyhq.com/posting-api/job-board/${token}?includeCompensation=true`;
+  try {
+    const res = await fetch(url, { headers: { Accept: "application/json" } });
+    if (!res.ok) { errors.push(`ashby:${token} HTTP ${res.status}`); return []; }
+    const data = await res.json();
+    return (data.jobs || []).map((j) => {
+      const title = decodeHtml(j.title || "").trim();
+      if (!ATS_TITLE_FILTER.test(title)) return null;
+      const location = j.location || "";
+      const rawText = cleanRawText(decodeHtml(j.descriptionPlain || ""));
+      return {
+        id: makeJobId(token, title, location),
+        title,
+        company: data.name || token,
+        location,
+        summary: extractRoleDescription(rawText, 500),
+        applyUrl: j.jobUrl || j.applyUrl,
+        platform: "Ashby",
+        posted: j.publishedAt ? formatDate(j.publishedAt) : "Recent",
+        salary: j.compensation?.summary || extractSalary(rawText),
+        scrapedAt: new Date().toISOString(),
+        rawText,
+      };
+    }).filter(Boolean);
+  } catch (e) {
+    errors.push(`ashby:${token} ${e.message}`);
+    return [];
+  }
+}
+
+// ============================================================
+// AI SCORING — Claude Haiku, batched. Replaces keyword counting.
+// Falls back silently to the keyword score if the key is missing,
+// the call fails, or we're running out of time budget.
+// ============================================================
+
+const CANDIDATE_PROFILE = `
+Matt Putterman — Senior Wealth Management Associate, Morgan Stanley (NYC), since Oct 2024.
+Prior: Wealth Management Analyst, Morgan Stanley (Jun 2022–Oct 2024); Financial Advisor, Equitable Advisors (2021–2022).
+Licenses: Series 7, Series 66, Life & Health Insurance, Financial Planning Specialist.
+Education: BS Financial Economics, Binghamton University (2021). ~4 years post-grad experience.
+Track record: 380+ financial plans delivered, avg $1.3M external assets per plan; $19.96M net acquired assets YTD 2024.
+Differentiators: selected for Equity Award Analysis (EAA) pilot — equity comp / RSU / stock option planning.
+Co-built a production GenAI (GPT) tool for advisor workflows: client summaries, meeting agendas, next steps.
+Leads instructor-led training for colleagues. Tools: MoneyGuide Pro, MS Office.
+Targets: NYC metro or remote. Compensation floor $100K total comp.
+Wants: senior associate / specialist / client-facing roles in wealth management, RIA, equity compensation,
+or WealthTech (client solutions, customer success, implementation). Not interested in commission-only,
+trainee, or entry-level roles, or in pure insurance sales.
+`.trim();
+
+async function scoreBatchWithAI(jobs, apiKey) {
+  const compact = jobs.map((j, i) => ({
+    i,
+    title: j.title,
+    company: j.company,
+    location: j.location,
+    salary: j.salary || "not listed",
+    desc: (j.summary || j.rawText || "").slice(0, 700),
+  }));
+
+  const prompt = `You are screening job listings for one specific candidate. Score each on genuine fit.
+
+CANDIDATE:
+${CANDIDATE_PROFILE}
+
+LISTINGS (JSON):
+${JSON.stringify(compact)}
+
+For each listing return an object with:
+- "i": the listing index
+- "score": 0-100 fit. Be harsh and use the full range. 80+ means he is a strong applicant who should apply today. 60-79 means plausible but a stretch or a slight step down. Below 40 means do not bother. Penalize commission-only, trainee, entry-level, insurance-sales, and roles requiring 10+ years or a CFA/MBA he lacks. Penalize total comp likely below $100K. Reward equity-comp/RSU/stock-plan work, financial planning depth, WealthTech client-facing roles, and anything using AI tooling for advisors.
+- "reason": one sentence, max 20 words, addressed to the candidate, explaining the score concretely. No fluff.
+- "gap": the single biggest thing he lacks for this role, max 8 words. Empty string if none.
+
+Return ONLY a JSON array. No markdown, no preamble.`;
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 2000,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+
+  if (!res.ok) throw new Error(`anthropic HTTP ${res.status}`);
+  const data = await res.json();
+  const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+  const clean = text.replace(/```json/g, "").replace(/```/g, "").trim();
+  return JSON.parse(clean);
+}
+
+async function applyAIScores(jobs, apiKey, deadline, errors) {
+  if (!apiKey) { errors.push("ANTHROPIC_API_KEY not set — using keyword scores"); return; }
+  if (Date.now() > deadline) { errors.push("time budget exhausted — using keyword scores"); return; }
+
+  const BATCH = 12;
+  const batches = [];
+  for (let i = 0; i < jobs.length; i += BATCH) batches.push(jobs.slice(i, i + BATCH));
+
+  const results = await Promise.allSettled(
+    batches.map((b) => scoreBatchWithAI(b, apiKey))
+  );
+
+  results.forEach((r, bi) => {
+    if (r.status !== "fulfilled") {
+      errors.push(`ai-batch-${bi}: ${r.reason?.message || "failed"}`);
+      return;
+    }
+    const batch = batches[bi];
+    for (const item of r.value) {
+      const job = batch[item.i];
+      if (!job) continue;
+      job.matchScore = Math.max(0, Math.min(99, Math.round(item.score)));
+      job.fitReason = item.reason;
+      job.aiScored = true;
+      if (item.gap) job.missingSkills = [item.gap];
+      job.fit = job.matchScore >= 80 ? "HIGH" : job.matchScore >= 60 ? "MED" : "LOW";
+    }
+  });
+}
+
+// ============================================================
+// MAIN — plain HTTP handler. All I/O parallel. Time-budgeted.
+// ============================================================
+
+export const handler = async () => {
+  const started = Date.now();
+  const AI_DEADLINE = started + 5000; // leave ~5s for scoring inside a 10s function
+  const errors = [];
+
+  const adzunaWM = WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location));
+  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location));
+  const ats = [
+    ...GREENHOUSE_BOARDS.map((t) => fetchGreenhouse(t, errors)),
+    ...LEVER_BOARDS.map((t) => fetchLever(t, errors)),
+    ...ASHBY_BOARDS.map((t) => fetchAshby(t, errors)),
+  ];
+
+  const [wmSettled, expSettled, atsSettled] = await Promise.all([
+    Promise.allSettled(adzunaWM),
+    Promise.allSettled(adzunaExp),
+    Promise.allSettled(ats),
+  ]);
+
+  const flat = (settled, label) =>
+    settled.flatMap((r, i) => {
+      if (r.status === "fulfilled") return r.value;
+      errors.push(`${label}[${i}]: ${r.reason?.message || "failed"}`);
+      return [];
+    });
+
+  // Route each ATS job to exactly one lane: WM if it hits real wealth-management
+  // keywords, otherwise the expanded lane. Without this the WM lane swallows
+  // every ATS listing and the expanded lane comes back empty.
+  const atsJobs = flat(atsSettled, "ats");
+  const atsWM = [];
+  const atsExp = [];
+  for (const j of atsJobs) {
+    const t = `${j.title} ${j.summary || j.rawText || ""}`.toLowerCase();
+    (WM_KEYWORDS_HIGH.some((k) => t.includes(k)) ? atsWM : atsExp).push(j);
   }
 
-  // === WM LANE processing ===
-  const wmFiltered = wmRaw.filter(j =>
-    !isCompanyBlocked(j.company) && isLocationValid(j.location, "wm")
+  const wmRaw = [...flat(wmSettled, "adzuna-wm"), ...atsWM];
+  const expRaw = [...flat(expSettled, "adzuna-exp"), ...atsExp];
+
+  // === WM LANE ===
+  const wmFiltered = wmRaw.filter(
+    (j) => !isCompanyBlocked(j.company) && isLocationValid(j.location, "wm")
   );
   const wmUnique = mergeListings(wmFiltered);
   for (const j of wmUnique) {
@@ -503,25 +693,22 @@ const scrapeHandler = async (event, context) => {
     j.keyMatch = scoring.matches?.slice(0, 4) || [];
     j.matchScore = calculateMatchScoreWM(j);
     j.lane = "wm";
-    delete j.rawText;
   }
 
-  // === EXPANDED LANE processing ===
-  const wmIds = new Set(wmUnique.map(j => j.id)); // dedup against WM
-  const expFiltered = expRaw.filter(j =>
-    !isCompanyBlocked(j.company)
-    && isLocationValid(j.location, "expanded")
-    && !wmIds.has(j.id)
+  // === EXPANDED LANE ===
+  const wmIds = new Set(wmUnique.map((j) => j.id));
+  const expFiltered = expRaw.filter(
+    (j) =>
+      !isCompanyBlocked(j.company) &&
+      isLocationValid(j.location, "expanded") &&
+      !wmIds.has(j.id)
   );
   const expUnique = mergeListings(expFiltered);
-
-  // Filter expanded to only items with category match
   const expScored = [];
   for (const j of expUnique) {
     const text = j.summary || j.rawText || "";
     const match = matchExpandedCategory(j.title, text);
-    if (!match) continue; // drop if no expanded category matches
-
+    if (!match) continue;
     j.expandedCategory = match.category;
     j.expandedLabel = match.label;
     j.fit = match.hits.length >= 2 ? "HIGH" : "MED";
@@ -530,33 +717,51 @@ const scrapeHandler = async (event, context) => {
     j.matchScore = calculateMatchScoreExpanded(j, match.hits.length);
     j.missingSkills = detectMissingSkills(j, match.category);
     j.lane = "expanded";
-    delete j.rawText;
     expScored.push(j);
   }
 
-  // Sort each lane by match score desc
+  // === AI SCORING — top candidates only, both lanes, in parallel ===
   wmUnique.sort((a, b) => b.matchScore - a.matchScore);
   expScored.sort((a, b) => b.matchScore - a.matchScore);
 
-  console.log(`WM: ${wmUnique.length} | Expanded: ${expScored.length}`);
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  await Promise.all([
+    applyAIScores(wmUnique.slice(0, 24), apiKey, AI_DEADLINE, errors),
+    applyAIScores(expScored.slice(0, 24), apiKey, AI_DEADLINE, errors),
+  ]);
+
+  // Re-sort with AI scores, then strip bulky text before returning
+  wmUnique.sort((a, b) => b.matchScore - a.matchScore);
+  expScored.sort((a, b) => b.matchScore - a.matchScore);
+  for (const j of [...wmUnique, ...expScored]) delete j.rawText;
 
   return {
     statusCode: 200,
     headers: {
       "Content-Type": "application/json",
-      "Cache-Control": "public, max-age=3600",
+      "Cache-Control": "no-store",
       "Access-Control-Allow-Origin": "*",
     },
     body: JSON.stringify({
       wm: wmUnique,
       expanded: expScored,
       lastUpdated: new Date().toISOString(),
+      elapsedMs: Date.now() - started,
+      aiScored: wmUnique.some((j) => j.aiScored) || expScored.some((j) => j.aiScored),
+      errors,
       counts: {
-        wm: { total: wmUnique.length, high: wmUnique.filter(j => j.fit === "HIGH").length, med: wmUnique.filter(j => j.fit === "MED").length, low: wmUnique.filter(j => j.fit === "LOW").length },
-        expanded: { total: expScored.length, high: expScored.filter(j => j.fit === "HIGH").length, med: expScored.filter(j => j.fit === "MED").length },
-      }
+        wm: {
+          total: wmUnique.length,
+          high: wmUnique.filter((j) => j.fit === "HIGH").length,
+          med: wmUnique.filter((j) => j.fit === "MED").length,
+          low: wmUnique.filter((j) => j.fit === "LOW").length,
+        },
+        expanded: {
+          total: expScored.length,
+          high: expScored.filter((j) => j.fit === "HIGH").length,
+          med: expScored.filter((j) => j.fit === "MED").length,
+        },
+      },
     }),
   };
 };
-
-export const handler = schedule("0 12,20 * * *", scrapeHandler);
