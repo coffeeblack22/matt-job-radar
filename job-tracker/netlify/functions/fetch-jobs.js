@@ -3,19 +3,18 @@
 
 
 // === WM LANE searches ===
+// HOME OFFICE focus: corporate-side roles supporting Financial Advisors, NOT
+// producer roles where you carry a book and a production target.
 const WM_SEARCHES = [
-  // Financial planning depth
-  { query: "financial planning specialist", location: "New York, NY" },
-  { query: "senior financial planning associate", location: "New York, NY" },
-  { query: "financial planning wealth management", location: "Remote" },
-  // AI / GenAI tooling for advisors
-  { query: "AI financial advisor technology", location: "New York, NY" },
-  { query: "advisor technology product wealth", location: "Remote" },
-  // Training and enabling advisors
-  { query: "advisor training enablement", location: "New York, NY" },
-  { query: "practice management advisor development", location: "New York, NY" },
-  // Core title coverage
-  { query: "wealth management associate series 7", location: "New York, NY" },
+  { query: "wealth management practice management", location: "New York, NY" },
+  { query: "advisor solutions wealth management", location: "New York, NY" },
+  { query: "financial planning consultant wealth management", location: "New York, NY" },
+  { query: "wealth management platform associate", location: "New York, NY" },
+  { query: "advisor development program manager", location: "New York, NY" },
+  { query: "financial planning strategist", location: "Remote" },
+  { query: "AI advisor technology wealth", location: "Remote" },
+  { query: "wealth management product associate", location: "New York, NY" },
+  { query: "field support wealth management", location: "New York, NY" },
 ];
 
 // === EXPANDED LANE searches ===
@@ -91,13 +90,15 @@ const BLOCKED_COMPANIES = [
 ];
 
 // WM lane: NYC metro + remote (NJ blocked since you'd commute from Brooklyn)
-const VALID_NY_LOCATION = /\b(new york|nyc|brooklyn|manhattan|queens|bronx|staten island|long island|westchester|yonkers|white plains|garden city|hempstead|mineola)\b/i;
+const VALID_NY_LOCATION = /\b(new york|nyc|brooklyn|manhattan|queens|bronx|staten island|long island|westchester|yonkers|white plains|garden city|hempstead|mineola|jersey city|hoboken|newark)\b/i;
 
 // Expanded lane: NYC metro + NJ + remote (per spec)
 const VALID_EXPANDED_LOCATION = /\b(new york|nyc|brooklyn|manhattan|queens|bronx|staten island|long island|westchester|yonkers|white plains|garden city|hempstead|mineola|jersey city|hoboken|newark|new jersey|nj)\b/i;
 
 const REMOTE_LOCATION = /\bremote\b/i;
-const NON_NY_STATES_WM = /,\s*(CA|TX|FL|IL|MA|GA|NJ|PA|CT|VA|WA|OR|NC|OH|MI|MN|CO|AZ|UT|TN|MO|MD|IN|WI|NV|KY|LA|OK|AR|NE|IA|KS|AL|SC|MS|WV|HI|AK|ID|MT|NM|ND|SD|VT|NH|ME|RI|DE|DC)\b/;
+// NJ removed: JPMorgan, Morgan Stanley and Raymond James run major home-office
+// operations in Jersey City, one PATH stop from Brooklyn.
+const NON_NY_STATES_WM = /,\s*(CA|TX|FL|IL|MA|GA|PA|CT|VA|WA|OR|NC|OH|MI|MN|CO|AZ|UT|TN|MO|MD|IN|WI|NV|KY|LA|OK|AR|NE|IA|KS|AL|SC|MS|WV|HI|AK|ID|MT|NM|ND|SD|VT|NH|ME|RI|DE|DC)\b/;
 const NON_NY_STATES_EXPANDED = /,\s*(CA|TX|FL|IL|MA|GA|PA|VA|WA|OR|NC|OH|MI|MN|CO|AZ|UT|TN|MO|MD|IN|WI|NV|KY|LA|OK|AR|NE|IA|KS|AL|SC|MS|WV|HI|AK|ID|MT|NM|ND|SD|VT|NH|ME|RI|DE|DC|CT)\b/;
 const NON_US_COUNTRIES = /\b(india|singapore|tokyo|japan|thailand|UAE|emirates|mumbai|bangkok|hong kong|china|UK|london|berlin|paris|france|germany|maharashtra|abu dhabi|dubai|sydney|melbourne|toronto|montreal|mexico|ireland|spain|italy|netherlands|amsterdam)\b/i;
 
@@ -595,6 +596,11 @@ Tools: MoneyGuide Pro, MS Office (Word, Excel, PowerPoint)
 WHAT HE IS LOOKING FOR
 - Total compensation floor of $100,000. Reject anything likely to land below it.
 - NYC metro (lives in Brooklyn) or remote.
+- WANTS HOME OFFICE / corporate-side wealth management roles: supporting, enabling, training and
+  building tools for Financial Advisors. This is what he does now and what he wants to keep doing.
+- Does NOT want to be a producer. No carrying a book of business, no asset-gathering quota, no
+  prospecting for his own clients. Private Client Advisor / Financial Advisor / Wealth Advisor
+  titles are the wrong direction for him.
 - Roles built around: deep financial planning work; AI and GenAI tooling for financial advisors;
   training, enabling and developing advisors.
 - Equity compensation experience is real and worth noting, but he does NOT want a role built
@@ -623,7 +629,12 @@ ${JSON.stringify(compact)}
 
 For each listing return an object with:
 - "i": the listing index
-- "score": 0-100 fit. Be harsh and use the full range. 80+ means he is a strong applicant who should apply today. 60-79 means plausible but a stretch or a slight step down. Below 40 means do not bother. Penalize commission-only, trainee, entry-level, insurance-sales, and roles requiring 10+ years or a CFA/MBA he lacks. Penalize total comp likely below $100K. Reward equity-comp/RSU/stock-plan work, financial planning depth, WealthTech client-facing roles, and anything using AI tooling for advisors.
+- "score": 0-100 fit. Be harsh and use the full range. 80+ means he is a strong applicant who should apply today. 60-79 means plausible but a stretch or a slight step down. Below 40 means do not bother.
+
+CRITICAL — he wants HOME OFFICE roles, meaning corporate-side roles that support, enable, train or build tools for Financial Advisors. He does NOT want producer roles where he carries his own book of clients and a production/sales quota.
+  REWARD HEAVILY: practice management, advisor development and training, advisor enablement, financial planning strategy and consulting, wealth management platform and product roles, advisor-facing technology, field support, investment solutions, planning-desk and internal-consultant roles, and anything applying AI or GenAI to advisor workflows. A role being internal rather than client-facing is a PLUS, not a minus — never penalize a role for lacking direct end-client contact.
+  PENALIZE HEAVILY: Financial Advisor, Private Client Advisor, Private Client Banker, Wealth Advisor, Relationship Manager and similar producer roles that require building or carrying a book of business, hitting asset-gathering targets, or prospecting for clients. Also penalize commission-only, trainee and advisor-development-*program* roles (i.e. training to become an advisor, as opposed to training advisors), insurance sales, and roles requiring 10+ years, a CFA or an MBA. Penalize total comp likely below $100K.
+  Also reward: financial planning depth (he has delivered 380+ plans and uses MoneyGuide Pro), WealthTech firms, and advisor-training experience.
 - "reason": one sentence, max 20 words, addressed to the candidate, explaining the score concretely. No fluff.
 - "gap": the single biggest thing he lacks for this role, max 8 words. Empty string if none.
 
