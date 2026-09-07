@@ -11,18 +11,18 @@ const WM_SEARCHES = [
 ];
 
 // === EXPANDED LANE searches ===
+// Trimmed: "chief of staff", "founders associate", "business development
+// financial services" and "strategic partnerships finance" were pulling roles
+// with no connection to Matt's background (Google Chief of Staff, Brex
+// enterprise sales, fraud ops). Removed for speed and signal.
 const EXPANDED_SEARCHES = [
   { query: "investor relations associate", location: "New York, NY" },
-  { query: "treasury analyst", location: "New York, NY" },
   { query: "compliance analyst finance", location: "New York, NY" },
   { query: "customer success fintech", location: "New York, NY" },
-  { query: "account executive fintech", location: "New York, NY" },
-  { query: "implementation manager fintech", location: "New York, NY" },
-  { query: "chief of staff", location: "New York, NY" },
-  { query: "strategic partnerships finance", location: "New York, NY" },
-  { query: "founders associate", location: "New York, NY" },
-  { query: "business development financial services", location: "New York, NY" },
-  { query: "customer success", location: "Remote" },
+  { query: "implementation manager wealth", location: "New York, NY" },
+  { query: "client solutions wealth management", location: "New York, NY" },
+  { query: "equity compensation stock plan", location: "New York, NY" },
+  { query: "customer success wealth management", location: "Remote" },
 ];
 
 // === WM keywords ===
@@ -363,18 +363,21 @@ function extractRoleDescription(text, maxLength = 500) {
 }
 
 // === ADZUNA ===
-async function fetchAdzuna(query, location) {
+async function fetchAdzuna(query, location, errors = [], delayMs = 0) {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
-  if (!appId || !appKey) return [];
+  if (!appId || !appKey) { errors.push("adzuna: keys not set"); return []; }
+  // Stagger to stay under Adzuna's burst rate limit. Firing 15 at once returns 429.
+  if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
   const cleanLocation = location.split(",")[0].trim();
-  const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=15&what=${encodeURIComponent(query)}&where=${encodeURIComponent(cleanLocation)}&max_days_old=3&sort_by=date`;
+  // 14 days, not 3 — a 3-day window on a free tier returns almost nothing.
+  const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=20&what=${encodeURIComponent(query)}&where=${encodeURIComponent(cleanLocation)}&max_days_old=14&sort_by=date`;
   try {
     const res = await fetch(url, { headers: { "Accept": "application/json" } });
-    if (!res.ok) return [];
+    if (!res.ok) { errors.push(`adzuna "${query}" HTTP ${res.status}`); return []; }
     const data = await res.json();
     return (data.results || []).map(parseAdzunaJob).filter(Boolean);
-  } catch (e) { return []; }
+  } catch (e) { errors.push(`adzuna "${query}" ${e.message}`); return []; }
 }
 
 function parseAdzunaJob(j) {
@@ -430,18 +433,17 @@ function mergeListings(allJobs) {
 // A bad token fails softly and shows up in the response `errors` array.
 // ============================================================
 
+// VERIFIED WORKING as of last run. To add a company, open
+// boards.greenhouse.io/<token> in a browser first — if it loads, the token is good.
 const GREENHOUSE_BOARDS = [
-  "addepar", "carta", "betterment", "ramp", "brex",
-  "plaid", "chime", "marqeta", "affirm",
+  "carta", "betterment", "brex", "chime", "affirm",
 ];
 
-const LEVER_BOARDS = [
-  "altruist", "vanta", "mercury",
-];
+// All three previous tokens 404'd. Verify at jobs.lever.co/<token> before adding.
+const LEVER_BOARDS = [];
 
-const ASHBY_BOARDS = [
-  "wealth", "arta-finance", "savvy",
-];
+// Verify at jobs.ashbyhq.com/<token> before adding.
+const ASHBY_BOARDS = ["savvy"];
 
 const ATS_TITLE_FILTER = /\b(wealth|advisor|adviser|planning|planner|client|customer success|account executive|account manager|implementation|onboarding|solutions|relationship manager|partnerships|equity comp|stock plan|business development|operations associate|chief of staff)\b/i;
 
@@ -645,8 +647,8 @@ export const handler = async () => {
   const AI_DEADLINE = started + 5000; // leave ~5s for scoring inside a 10s function
   const errors = [];
 
-  const adzunaWM = WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location));
-  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location));
+  const adzunaWM = WM_SEARCHES.map((s, i) => fetchAdzuna(s.query, s.location, errors, i * 120));
+  const adzunaExp = EXPANDED_SEARCHES.map((s, i) => fetchAdzuna(s.query, s.location, errors, i * 120));
   const ats = [
     ...GREENHOUSE_BOARDS.map((t) => fetchGreenhouse(t, errors)),
     ...LEVER_BOARDS.map((t) => fetchLever(t, errors)),
@@ -730,10 +732,18 @@ export const handler = async () => {
     applyAIScores(expScored.slice(0, 24), apiKey, AI_DEADLINE, errors),
   ]);
 
-  // Re-sort with AI scores, then strip bulky text before returning
-  wmUnique.sort((a, b) => b.matchScore - a.matchScore);
-  expScored.sort((a, b) => b.matchScore - a.matchScore);
-  for (const j of [...wmUnique, ...expScored]) delete j.rawText;
+  // Re-sort with AI scores, then drop the clear rejects. Anything the model
+  // scored under 35 is noise Matt should never have to scroll past.
+  const MIN_SCORE = 35;
+  const keep = (arr) => {
+    const filtered = arr.filter((j) => !j.aiScored || j.matchScore >= MIN_SCORE);
+    return filtered.length ? filtered : arr.slice(0, 5);
+  };
+  let wmFinal = keep(wmUnique);
+  let expFinal = keep(expScored);
+  wmFinal.sort((a, b) => b.matchScore - a.matchScore);
+  expFinal.sort((a, b) => b.matchScore - a.matchScore);
+  for (const j of [...wmFinal, ...expFinal]) delete j.rawText;
 
   return {
     statusCode: 200,
@@ -743,23 +753,23 @@ export const handler = async () => {
       "Access-Control-Allow-Origin": "*",
     },
     body: JSON.stringify({
-      wm: wmUnique,
-      expanded: expScored,
+      wm: wmFinal,
+      expanded: expFinal,
       lastUpdated: new Date().toISOString(),
       elapsedMs: Date.now() - started,
-      aiScored: wmUnique.some((j) => j.aiScored) || expScored.some((j) => j.aiScored),
+      aiScored: wmFinal.some((j) => j.aiScored) || expFinal.some((j) => j.aiScored),
       errors,
       counts: {
         wm: {
-          total: wmUnique.length,
-          high: wmUnique.filter((j) => j.fit === "HIGH").length,
-          med: wmUnique.filter((j) => j.fit === "MED").length,
-          low: wmUnique.filter((j) => j.fit === "LOW").length,
+          total: wmFinal.length,
+          high: wmFinal.filter((j) => j.fit === "HIGH").length,
+          med: wmFinal.filter((j) => j.fit === "MED").length,
+          low: wmFinal.filter((j) => j.fit === "LOW").length,
         },
         expanded: {
-          total: expScored.length,
-          high: expScored.filter((j) => j.fit === "HIGH").length,
-          med: expScored.filter((j) => j.fit === "MED").length,
+          total: expFinal.length,
+          high: expFinal.filter((j) => j.fit === "HIGH").length,
+          med: expFinal.filter((j) => j.fit === "MED").length,
         },
       },
     }),
