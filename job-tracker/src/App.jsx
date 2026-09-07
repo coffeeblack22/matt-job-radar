@@ -886,6 +886,13 @@ export default function App() {
       if (d.jobs && !d.wm) setData({ wm: d.jobs, expanded: [] });
       else setData({ wm: d.wm || [], expanded: d.expanded || [] });
       setLastUpdated(d.lastUpdated);
+      // Surface partial failures instead of silently showing an empty board.
+      const total = (d.wm?.length || 0) + (d.expanded?.length || 0);
+      if (d.errors?.length && total === 0) {
+        setError(`No jobs returned. ${d.errors.slice(0, 3).join(" | ")}`);
+      } else if (d.errors?.length) {
+        setError(`${total} jobs loaded${d.aiScored ? " (AI scored)" : " (keyword scored)"} — ${d.errors.length} source(s) failed: ${d.errors.slice(0, 2).join(" | ")}`);
+      }
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   }, []);
