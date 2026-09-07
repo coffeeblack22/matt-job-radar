@@ -3,18 +3,18 @@
 
 
 // === WM LANE searches ===
-// HOME OFFICE focus: corporate-side roles supporting Financial Advisors, NOT
-// producer roles where you carry a book and a production target.
+// Mix of home-office phrasing and standard WM titles. Narrow queries alone
+// returned almost nothing — postings rarely use internal jargon.
 const WM_SEARCHES = [
+  { query: "wealth management associate", location: "New York, NY" },
+  { query: "financial planning associate", location: "New York, NY" },
   { query: "wealth management practice management", location: "New York, NY" },
-  { query: "advisor solutions wealth management", location: "New York, NY" },
-  { query: "financial planning consultant wealth management", location: "New York, NY" },
-  { query: "wealth management platform associate", location: "New York, NY" },
-  { query: "advisor development program manager", location: "New York, NY" },
-  { query: "financial planning strategist", location: "Remote" },
-  { query: "AI advisor technology wealth", location: "Remote" },
-  { query: "wealth management product associate", location: "New York, NY" },
-  { query: "field support wealth management", location: "New York, NY" },
+  { query: "advisor development wealth management", location: "New York, NY" },
+  { query: "wealth management platform product", location: "New York, NY" },
+  { query: "financial planning consultant", location: "New York, NY" },
+  { query: "wealth management analyst series 7", location: "New York, NY" },
+  { query: "financial planning specialist", location: "Remote" },
+  { query: "advisor technology wealth management", location: "Remote" },
 ];
 
 // === EXPANDED LANE searches ===
@@ -84,22 +84,40 @@ const KEYWORDS_NEGATIVE = [
   "trainee program", "career changer"
 ];
 
+// Programs that train you INTO becoming a Financial Advisor. Different thing
+// entirely from home-office roles that train existing advisors.
+const BECOME_ADVISOR_PATTERNS = [
+  /advisor development program/i,
+  /financial advisor (trainee|training) program/i,
+  /advisor (trainee|training) program/i,
+  /become a (financial )?advisor/i,
+  /path to becoming/i,
+  /aspiring (financial )?advisor/i,
+  /financial advisor associate program/i,
+  /wealth advisor associate program/i,
+  /(launch|start|build) your (own )?(book|practice|career as)/i,
+  /candidates? (will|to) obtain (their )?series/i,
+];
+
+function isBecomeAdvisorTrack(job) {
+  const text = `${job.title} ${job.summary || job.rawText || ""}`;
+  return BECOME_ADVISOR_PATTERNS.some((rx) => rx.test(text));
+}
+
 // === HARD FILTERS ===
 const BLOCKED_COMPANIES = [
   "equitable advisors", "northwestern mutual", "new york life insurance"
 ];
 
 // WM lane: NYC metro + remote (NJ blocked since you'd commute from Brooklyn)
-const VALID_NY_LOCATION = /\b(new york|nyc|brooklyn|manhattan|queens|bronx|staten island|long island|westchester|yonkers|white plains|garden city|hempstead|mineola|jersey city|hoboken|newark)\b/i;
+const VALID_NY_LOCATION = /\b(new york|nyc|brooklyn|manhattan|queens|bronx|staten island|long island|westchester|yonkers|white plains|garden city|hempstead|mineola)\b/i;
 
 // Expanded lane: NYC metro + NJ + remote (per spec)
-const VALID_EXPANDED_LOCATION = /\b(new york|nyc|brooklyn|manhattan|queens|bronx|staten island|long island|westchester|yonkers|white plains|garden city|hempstead|mineola|jersey city|hoboken|newark|new jersey|nj)\b/i;
+const VALID_EXPANDED_LOCATION = /\b(new york|nyc|brooklyn|manhattan|queens|bronx|staten island|long island|westchester|yonkers|white plains|garden city|hempstead|mineola)\b/i;
 
 const REMOTE_LOCATION = /\bremote\b/i;
-// NJ removed: JPMorgan, Morgan Stanley and Raymond James run major home-office
-// operations in Jersey City, one PATH stop from Brooklyn.
-const NON_NY_STATES_WM = /,\s*(CA|TX|FL|IL|MA|GA|PA|CT|VA|WA|OR|NC|OH|MI|MN|CO|AZ|UT|TN|MO|MD|IN|WI|NV|KY|LA|OK|AR|NE|IA|KS|AL|SC|MS|WV|HI|AK|ID|MT|NM|ND|SD|VT|NH|ME|RI|DE|DC)\b/;
-const NON_NY_STATES_EXPANDED = /,\s*(CA|TX|FL|IL|MA|GA|PA|VA|WA|OR|NC|OH|MI|MN|CO|AZ|UT|TN|MO|MD|IN|WI|NV|KY|LA|OK|AR|NE|IA|KS|AL|SC|MS|WV|HI|AK|ID|MT|NM|ND|SD|VT|NH|ME|RI|DE|DC|CT)\b/;
+const NON_NY_STATES_WM = /,\s*(CA|TX|FL|IL|MA|GA|NJ|PA|CT|VA|WA|OR|NC|OH|MI|MN|CO|AZ|UT|TN|MO|MD|IN|WI|NV|KY|LA|OK|AR|NE|IA|KS|AL|SC|MS|WV|HI|AK|ID|MT|NM|ND|SD|VT|NH|ME|RI|DE|DC)\b/;
+const NON_NY_STATES_EXPANDED = /,\s*(CA|TX|FL|IL|MA|GA|NJ|PA|VA|WA|OR|NC|OH|MI|MN|CO|AZ|UT|TN|MO|MD|IN|WI|NV|KY|LA|OK|AR|NE|IA|KS|AL|SC|MS|WV|HI|AK|ID|MT|NM|ND|SD|VT|NH|ME|RI|DE|DC|CT)\b/;
 const NON_US_COUNTRIES = /\b(india|singapore|tokyo|japan|thailand|UAE|emirates|mumbai|bangkok|hong kong|china|UK|london|berlin|paris|france|germany|maharashtra|abu dhabi|dubai|sydney|melbourne|toronto|montreal|mexico|ireland|spain|italy|netherlands|amsterdam)\b/i;
 
 function isLocationValid(location, lane = "wm") {
@@ -372,7 +390,7 @@ function extractRoleDescription(text, maxLength = 500) {
 }
 
 // === ADZUNA ===
-async function fetchAdzuna(query, location, errors = [], delayMs = 0) {
+async function fetchAdzuna(query, location, errors = [], delayMs = 0, page = 1) {
   const appId = process.env.ADZUNA_APP_ID;
   const appKey = process.env.ADZUNA_APP_KEY;
   if (!appId || !appKey) { errors.push("adzuna: keys not set"); return []; }
@@ -380,7 +398,7 @@ async function fetchAdzuna(query, location, errors = [], delayMs = 0) {
   if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
   const cleanLocation = location.split(",")[0].trim();
   // 14 days, not 3 — a 3-day window on a free tier returns almost nothing.
-  const url = `https://api.adzuna.com/v1/api/jobs/us/search/1?app_id=${appId}&app_key=${appKey}&results_per_page=50&what=${encodeURIComponent(query)}&where=${encodeURIComponent(cleanLocation)}&max_days_old=14&sort_by=date`;
+  const url = `https://api.adzuna.com/v1/api/jobs/us/search/${page}?app_id=${appId}&app_key=${appKey}&results_per_page=50&what=${encodeURIComponent(query)}&where=${encodeURIComponent(cleanLocation)}&max_days_old=30&sort_by=date`;
   try {
     let res = await fetch(url, { headers: { "Accept": "application/json" } });
     if (res.status === 429) {
@@ -633,7 +651,7 @@ For each listing return an object with:
 
 CRITICAL — he wants HOME OFFICE roles, meaning corporate-side roles that support, enable, train or build tools for Financial Advisors. He does NOT want producer roles where he carries his own book of clients and a production/sales quota.
   REWARD HEAVILY: practice management, advisor development and training, advisor enablement, financial planning strategy and consulting, wealth management platform and product roles, advisor-facing technology, field support, investment solutions, planning-desk and internal-consultant roles, and anything applying AI or GenAI to advisor workflows. A role being internal rather than client-facing is a PLUS, not a minus — never penalize a role for lacking direct end-client contact.
-  PENALIZE HEAVILY: Financial Advisor, Private Client Advisor, Private Client Banker, Wealth Advisor, Relationship Manager and similar producer roles that require building or carrying a book of business, hitting asset-gathering targets, or prospecting for clients. Also penalize commission-only, trainee and advisor-development-*program* roles (i.e. training to become an advisor, as opposed to training advisors), insurance sales, and roles requiring 10+ years, a CFA or an MBA. Penalize total comp likely below $100K.
+  RANK LOWER (but still include, roughly 45-60, so he can judge them himself): Financial Advisor, Private Client Advisor, Private Client Banker, Wealth Advisor, Relationship Manager and similar producer roles that require building or carrying a book of business, hitting asset-gathering targets, or prospecting for clients. Also penalize commission-only, trainee and advisor-development-*program* roles (i.e. training to become an advisor, as opposed to training advisors), insurance sales, and roles requiring 10+ years, a CFA or an MBA. Penalize total comp likely below $100K.
   Also reward: financial planning depth (he has delivered 380+ plans and uses MoneyGuide Pro), WealthTech firms, and advisor-training experience.
 - "reason": one sentence, max 20 words, addressed to the candidate, explaining the score concretely. No fluff.
 - "gap": the single biggest thing he lacks for this role, max 8 words. Empty string if none.
@@ -693,6 +711,44 @@ async function applyAIScores(jobs, apiKey, deadline, errors) {
   });
 }
 
+
+// === PRODUCER ROLE BLOCK ===
+// Matt does not want to BE an advisor. These titles carry a book, a production
+// quota, or are trainee tracks into advising. Excluded outright, not ranked down.
+const PRODUCER_TITLE = new RegExp([
+  "\\bfinancial advisor\\b",
+  "\\bfinancial adviser\\b",
+  "\\bprivate client (advisor|adviser|banker)\\b",
+  "\\b(senior |principal |lead |associate )?wealth (advisor|adviser)\\b",
+  "\\bprivate wealth (advisor|adviser)\\b",
+  "\\brelationship manager\\b",
+  "\\bfinancial (consultant|planner) [-–—]? ?(trainee|development)\\b",
+  "\\badvisor development program\\b",
+  "\\badvisor trainee\\b",
+  "\\bregistered representative\\b",
+  "\\bbanker\\b",
+  "\\btrust advisor\\b",
+].join("|"), "i");
+
+function isProducerRole(title) {
+  return PRODUCER_TITLE.test(title || "");
+}
+
+// Cap how many roles any one employer can occupy, so JPMorgan doesn't fill
+// the whole board with variations of the same posting.
+function capPerCompany(jobs, max) {
+  const seen = new Map();
+  const out = [];
+  for (const j of jobs) {
+    const key = (j.company || "").toLowerCase();
+    const n = seen.get(key) || 0;
+    if (n >= max) continue;
+    seen.set(key, n + 1);
+    out.push(j);
+  }
+  return out;
+}
+
 // === NEAR-DUPLICATE COLLAPSE ===
 // Big banks post the same role once per branch. Normalizing company and title
 // so "Private Client Advisor - Manhattan (Upper Eastside)" and
@@ -746,8 +802,11 @@ export const handler = async () => {
   // Adzuna's free tier rejects bursts. Space every query 300ms apart across
   // both lanes rather than firing all of them simultaneously.
   let slot = 0;
-  const adzunaWM = WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 100));
-  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 100));
+  const adzunaWM = [
+    ...WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 80, 1)),
+    ...WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 80, 2)),
+  ];
+  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 80));
   const ats = [
     ...GREENHOUSE_BOARDS.map((t) => fetchGreenhouse(t, errors)),
     ...LEVER_BOARDS.map((t) => fetchLever(t, errors)),
@@ -783,7 +842,9 @@ export const handler = async () => {
 
   // === WM LANE ===
   const wmFiltered = wmRaw.filter(
-    (j) => !isCompanyBlocked(j.company) && isLocationValid(j.location, "wm")
+    (j) => !isCompanyBlocked(j.company)
+      && isLocationValid(j.location, "wm")
+      && !isBecomeAdvisorTrack(j)
   );
   const wmUnique = mergeListings(wmFiltered);
   for (const j of wmUnique) {
@@ -832,23 +893,26 @@ export const handler = async () => {
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   await Promise.all([
-    applyAIScores(wmCollapsed.slice(0, 28), apiKey, AI_DEADLINE, errors),
-    applyAIScores(expCollapsed.slice(0, 28), apiKey, AI_DEADLINE, errors),
+    applyAIScores(wmCollapsed.slice(0, 48), apiKey, AI_DEADLINE, errors),
+    applyAIScores(expCollapsed.slice(0, 32), apiKey, AI_DEADLINE, errors),
   ]);
 
   // Re-sort with AI scores, then drop the clear rejects. Anything the model
   // scored under 35 is noise Matt should never have to scroll past.
   // Previously anything without an AI score bypassed this filter entirely,
   // which is how a reinsurance SVP role at 29 stayed in the wealth lane.
-  const MIN_SCORE = 35;
+  const MIN_SCORE = 30;
   const keep = (arr) => {
     const filtered = arr.filter((j) => j.matchScore >= MIN_SCORE);
     return filtered.length ? filtered : arr.slice(0, 5);
   };
-  let wmFinal = keep(wmCollapsed);
+  let wmFinal = keep(wmCollapsed).filter((j) => !isBecomeAdvisorTrack(j));
   let expFinal = keep(expCollapsed);
   wmFinal.sort((a, b) => b.matchScore - a.matchScore);
   expFinal.sort((a, b) => b.matchScore - a.matchScore);
+  // Max 3 roles per employer, then the best 25 overall.
+  wmFinal = capPerCompany(wmFinal, 3).slice(0, 25);
+  expFinal = capPerCompany(expFinal, 3).slice(0, 15);
   for (const j of [...wmFinal, ...expFinal]) delete j.rawText;
 
   return {
