@@ -655,7 +655,9 @@ function NewCard({ job, status, onApplyClick, onMarkInterested, onMarkNotInteres
           <div className="job-meta">{job.company}{job.location ? ` · ${job.location}` : ""}</div>
           <div className="match-row">
             {job.matchScore && <MatchScore score={job.matchScore} />}
-            {job.salary && <span className="salary">💰 {job.salary}</span>}
+            <span className="salary" style={job.salary ? undefined : { opacity: 0.45, fontWeight: 400 }}>
+              {job.salary ? `💰 ${job.salary}` : "salary not posted"}
+            </span>
           </div>
           {job.fitReason && (
             <div className={`fit-reason ${isExpanded ? "expanded" : ""}`}>
@@ -867,6 +869,9 @@ export default function App() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [notice, setNotice] = useState(null);
+  const [sourceErrors, setSourceErrors] = useState([]);
+  const [showSourceErrors, setShowSourceErrors] = useState(false);
   const [filter, setFilter] = useState("ALL");
   const [categoryFilter, setCategoryFilter] = useState("ALL");
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -888,10 +893,14 @@ export default function App() {
       setLastUpdated(d.lastUpdated);
       // Surface partial failures instead of silently showing an empty board.
       const total = (d.wm?.length || 0) + (d.expanded?.length || 0);
-      if (d.errors?.length && total === 0) {
-        setError(`No jobs returned. ${d.errors.slice(0, 3).join(" | ")}`);
+      if (total === 0) {
+        setError(`No jobs returned. ${(d.errors || []).slice(0, 3).join(" | ")}`);
       } else if (d.errors?.length) {
-        setError(`${total} jobs loaded${d.aiScored ? " (AI scored)" : " (keyword scored)"} — ${d.errors.length} source(s) failed: ${d.errors.slice(0, 2).join(" | ")}`);
+        // Partial failure is not a load failure — say so plainly.
+        setNotice(`${total} jobs loaded${d.aiScored ? " · AI scored" : " · keyword scored"} · ${d.errors.length} source(s) unavailable`);
+        setSourceErrors(d.errors);
+      } else {
+        setNotice(null); setSourceErrors([]);
       }
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
@@ -1088,6 +1097,38 @@ export default function App() {
             <span className="status-text">{new Date(lastUpdated).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}</span>
             {counts.new > 0 && tab === "active" && <span className="status-text">· {counts.new} new today</span>}
             <span className="status-meta">· auto-refreshes 8 AM & 4 PM</span>
+          </div>
+        )}
+
+        {notice && (
+          <div style={{
+            background: "rgba(255,255,255,0.04)", border: "1px solid rgba(255,255,255,0.10)",
+            borderRadius: 10, padding: "10px 12px", marginBottom: 12, fontSize: 12,
+            color: "rgba(255,255,255,0.62)", lineHeight: 1.5,
+          }}>
+            <span>{notice}</span>
+            {sourceErrors.length > 0 && (
+              <>
+                <button
+                  onClick={() => setShowSourceErrors((v) => !v)}
+                  style={{
+                    marginLeft: 8, background: "none", border: "none", padding: 0,
+                    color: "rgba(255,255,255,0.5)", textDecoration: "underline",
+                    cursor: "pointer", fontSize: 12, fontFamily: "inherit",
+                  }}
+                >
+                  {showSourceErrors ? "hide" : "details"}
+                </button>
+                {showSourceErrors && (
+                  <div style={{
+                    marginTop: 8, fontFamily: "'JetBrains Mono', monospace",
+                    fontSize: 11, color: "rgba(255,255,255,0.45)", whiteSpace: "pre-wrap",
+                  }}>
+                    {sourceErrors.join("\n")}
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
 
