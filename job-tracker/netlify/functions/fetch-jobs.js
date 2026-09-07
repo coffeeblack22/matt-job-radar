@@ -647,6 +647,47 @@ async function applyAIScores(jobs, apiKey, deadline, errors) {
   });
 }
 
+// === NEAR-DUPLICATE COLLAPSE ===
+// Big banks post the same role once per branch. Normalizing company and title
+// so "Private Client Advisor - Manhattan (Upper Eastside)" and
+// "...(Midtown West)" collapse into a single card.
+const COMPANY_ALIASES = [
+  [/^(j\.?\s?p\.?\s?morgan|jpmorgan).*/i, "JPMorgan Chase"],
+  [/^bank of america.*/i, "Bank of America"],
+  [/^(citi|citigroup).*/i, "Citigroup"],
+  [/^morgan stanley.*/i, "Morgan Stanley"],
+  [/^addepar.*/i, "Addepar"],
+];
+
+function normalizeCompany(name) {
+  const raw = (name || "").trim();
+  for (const [rx, canonical] of COMPANY_ALIASES) if (rx.test(raw)) return canonical;
+  return raw.replace(/,?\s*(inc|llc|ltd|n\.?a\.?|& co\.?)\.?$/i, "").trim();
+}
+
+const LOCATION_HINT = /\b(ny|nyc|new york|manhattan|brooklyn|queens|bronx|staten island|midtown|downtown|uptown|east ?side|west ?side|empire state|new brighton|arden heights|remote|usa|us|philadelphia|pa|nj|west coast|east coast)\b/i;
+
+function normalizeTitle(title) {
+  let t = (title || "").replace(/\([^)]*\)/g, " ");
+  const parts = t.split(/\s+[-\u2013\u2014|]\s+/);
+  while (parts.length > 1 && LOCATION_HINT.test(parts[parts.length - 1])) parts.pop();
+  t = parts.join(" - ");
+  return t.toLowerCase().replace(/[^a-z0-9 ]/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function collapseDuplicates(jobs) {
+  const byKey = new Map();
+  for (const j of jobs) {
+    j.company = normalizeCompany(j.company);
+    const key = `${j.company.toLowerCase()}|${normalizeTitle(j.title)}`;
+    const existing = byKey.get(key);
+    if (!existing) { byKey.set(key, j); continue; }
+    existing.duplicateCount = (existing.duplicateCount || 1) + 1;
+    if (!existing.salary && j.salary) { existing.salary = j.salary; existing.applyUrl = j.applyUrl; }
+  }
+  return Array.from(byKey.values());
+}
+
 // ============================================================
 // MAIN — plain HTTP handler. All I/O parallel. Time-budgeted.
 // ============================================================
@@ -659,8 +700,8 @@ export const handler = async () => {
   // Adzuna's free tier rejects bursts. Space every query 300ms apart across
   // both lanes rather than firing all of them simultaneously.
   let slot = 0;
-  const adzunaWM = WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 300));
-  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 300));
+  const adzunaWM = WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 150));
+  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 150));
   const ats = [
     ...GREENHOUSE_BOARDS.map((t) => fetchGreenhouse(t, errors)),
     ...LEVER_BOARDS.map((t) => fetchLever(t, errors)),
@@ -738,21 +779,28 @@ export const handler = async () => {
   wmUnique.sort((a, b) => b.matchScore - a.matchScore);
   expScored.sort((a, b) => b.matchScore - a.matchScore);
 
+  // Collapse near-duplicates BEFORE scoring: fewer jobs means the AI budget
+  // now covers the whole list instead of the first 24.
+  const wmCollapsed = collapseDuplicates(wmUnique);
+  const expCollapsed = collapseDuplicates(expScored);
+
   const apiKey = process.env.ANTHROPIC_API_KEY;
   await Promise.all([
-    applyAIScores(wmUnique.slice(0, 24), apiKey, AI_DEADLINE, errors),
-    applyAIScores(expScored.slice(0, 24), apiKey, AI_DEADLINE, errors),
+    applyAIScores(wmCollapsed.slice(0, 36), apiKey, AI_DEADLINE, errors),
+    applyAIScores(expCollapsed.slice(0, 36), apiKey, AI_DEADLINE, errors),
   ]);
 
   // Re-sort with AI scores, then drop the clear rejects. Anything the model
   // scored under 35 is noise Matt should never have to scroll past.
+  // Previously anything without an AI score bypassed this filter entirely,
+  // which is how a reinsurance SVP role at 29 stayed in the wealth lane.
   const MIN_SCORE = 35;
   const keep = (arr) => {
-    const filtered = arr.filter((j) => !j.aiScored || j.matchScore >= MIN_SCORE);
+    const filtered = arr.filter((j) => j.matchScore >= MIN_SCORE);
     return filtered.length ? filtered : arr.slice(0, 5);
   };
-  let wmFinal = keep(wmUnique);
-  let expFinal = keep(expScored);
+  let wmFinal = keep(wmCollapsed);
+  let expFinal = keep(expCollapsed);
   wmFinal.sort((a, b) => b.matchScore - a.matchScore);
   expFinal.sort((a, b) => b.matchScore - a.matchScore);
   for (const j of [...wmFinal, ...expFinal]) delete j.rawText;
