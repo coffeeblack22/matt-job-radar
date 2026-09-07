@@ -4,12 +4,18 @@
 
 // === WM LANE searches ===
 const WM_SEARCHES = [
-  { query: "wealth management associate", location: "New York, NY" },
-  { query: "registered client associate series 7", location: "New York, NY" },
-  { query: "financial planning associate", location: "New York, NY" },
-  { query: "private client advisor", location: "New York, NY" },
-  { query: "equity compensation stock plan advisor", location: "New York, NY" },
-  { query: "wealth management", location: "Remote" },
+  // Financial planning depth
+  { query: "financial planning specialist", location: "New York, NY" },
+  { query: "senior financial planning associate", location: "New York, NY" },
+  { query: "financial planning wealth management", location: "Remote" },
+  // AI / GenAI tooling for advisors
+  { query: "AI financial advisor technology", location: "New York, NY" },
+  { query: "advisor technology product wealth", location: "Remote" },
+  // Training and enabling advisors
+  { query: "advisor training enablement", location: "New York, NY" },
+  { query: "practice management advisor development", location: "New York, NY" },
+  // Core title coverage
+  { query: "wealth management associate series 7", location: "New York, NY" },
 ];
 
 // === EXPANDED LANE searches ===
@@ -556,18 +562,45 @@ async function fetchAshby(token, errors) {
 // ============================================================
 
 const CANDIDATE_PROFILE = `
-Matt Putterman — Senior Wealth Management Associate, Morgan Stanley (NYC), since Oct 2024.
-Prior: Wealth Management Analyst, Morgan Stanley (Jun 2022–Oct 2024); Financial Advisor, Equitable Advisors (2021–2022).
-Licenses: Series 7, Series 66, Life & Health Insurance, Financial Planning Specialist.
-Education: BS Financial Economics, Binghamton University (2021). ~4 years post-grad experience.
-Track record: 380+ financial plans delivered, avg $1.3M external assets per plan; $19.96M net acquired assets YTD 2024.
-Differentiators: selected for Equity Award Analysis (EAA) pilot — equity comp / RSU / stock option planning.
-Co-built a production GenAI (GPT) tool for advisor workflows: client summaries, meeting agendas, next steps.
-Leads instructor-led training for colleagues. Tools: MoneyGuide Pro, MS Office.
-Targets: NYC metro or remote. Compensation floor $100K total comp.
-Wants: senior associate / specialist / client-facing roles in wealth management, RIA, equity compensation,
-or WealthTech (client solutions, customer success, implementation). Not interested in commission-only,
-trainee, or entry-level roles, or in pure insurance sales.
+RESUME — Matthew Putterman, Brooklyn NY
+
+Morgan Stanley, New York NY
+Senior Wealth Management Associate (Oct 2024 - present)
+- Selected for the Equity Award Analysis (EAA) pilot: partners with Financial Advisors whose
+  clients hold equity compensation, educates clients on their awards, and builds custom EAA
+  reports aligning equity awards to financial goals.
+- Co-developed a custom Generative AI (GPT) solution for wealth management with cross-functional
+  teams, using pre-built prompts to generate structured client summaries, personalized meeting
+  agendas, and next steps. Holds AI training and LinkedIn certifications.
+- Coaches and develops colleagues through structured Instructor-Led Training classes, supporting
+  onboarding and skill growth.
+
+Wealth Management Analyst (Jun 2022 - Oct 2024)
+- Acts as an extension of Financial Advisors, running a planning process using modern wealth
+  management tools, tailored planning strategies, and recurring plan performance reviews.
+- Conducts data-driven client discovery across internal and external accounts, aggregating all
+  assets and liabilities into total net worth, goal-based plans. Models alternate strategies to
+  raise probability of success in retirement. Analyzes allocation across equities, fixed income
+  and alternatives.
+- 380+ financial plans delivered, averaging $1,300,000 external assets per plan.
+- $19,959,482 in Net Acquired Assets YTD 2024 as of September.
+- Scans advisor books of business to identify planning opportunities and build pipeline.
+
+Equitable Advisors, Financial Advisor (Sep 2021 - Jun 2022)
+
+Education: BS Financial Economics, Binghamton University, Harpur College (May 2021)
+Licenses: Series 7, Series 66, Life and Health Insurance, Financial Planning Specialist
+Tools: MoneyGuide Pro, MS Office (Word, Excel, PowerPoint)
+
+WHAT HE IS LOOKING FOR
+- Total compensation floor of $100,000. Reject anything likely to land below it.
+- NYC metro (lives in Brooklyn) or remote.
+- Roles built around: deep financial planning work; AI and GenAI tooling for financial advisors;
+  training, enabling and developing advisors.
+- Equity compensation experience is real and worth noting, but he does NOT want a role built
+  primarily around equity comp administration.
+- Roughly 4 years of post-graduate experience. Not a trainee, not entry-level, no commission-only
+  or insurance-sales roles. Also not a fit for roles needing 10+ years, a CFA, or an MBA.
 `.trim();
 
 async function scoreBatchWithAI(jobs, apiKey) {
@@ -702,8 +735,8 @@ export const handler = async () => {
   // Adzuna's free tier rejects bursts. Space every query 300ms apart across
   // both lanes rather than firing all of them simultaneously.
   let slot = 0;
-  const adzunaWM = WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 150));
-  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 150));
+  const adzunaWM = WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 100));
+  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 100));
   const ats = [
     ...GREENHOUSE_BOARDS.map((t) => fetchGreenhouse(t, errors)),
     ...LEVER_BOARDS.map((t) => fetchLever(t, errors)),
