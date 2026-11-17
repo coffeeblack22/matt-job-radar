@@ -426,6 +426,7 @@ function parseAdzunaJob(j) {
     summary: description, applyUrl: j.redirect_url,
     platform: "Adzuna",
     posted: j.created ? formatDate(j.created) : "Recent",
+    postedAt: j.created ? new Date(j.created).toISOString() : null,
     salary, scrapedAt: new Date().toISOString(),
     rawText, // keep for scoring
   };
@@ -479,6 +480,8 @@ const LEVER_BOARDS = [];
 // Verify at jobs.ashbyhq.com/<token> before adding.
 const ASHBY_BOARDS = ["savvy"];
 
+const WRONG_FUNCTION = /\b(software|engineer|engineering|developer|devops|architect|data scientist|security|network|qa |sdet|nurse|attorney|paralegal|janitor|teller|intern)\b/i;
+
 const ATS_TITLE_FILTER = /\b(wealth|advisor|adviser|planning|planner|client|customer success|account executive|account manager|implementation|onboarding|solutions|relationship manager|partnerships|equity comp|stock plan|business development|operations associate|chief of staff)\b/i;
 
 async function fetchGreenhouse(token, errors) {
@@ -489,7 +492,7 @@ async function fetchGreenhouse(token, errors) {
     const data = await res.json();
     return (data.jobs || []).map((j) => {
       const title = decodeHtml(j.title || "").trim();
-      if (!ATS_TITLE_FILTER.test(title)) return null;
+      if (!ATS_TITLE_FILTER.test(title) || WRONG_FUNCTION.test(title)) return null;
       const location = j.location?.name || "";
       const rawText = cleanRawText(decodeHtml(j.content || ""));
       return {
@@ -501,6 +504,7 @@ async function fetchGreenhouse(token, errors) {
         applyUrl: j.absolute_url,
         platform: "Greenhouse",
         posted: j.updated_at ? formatDate(j.updated_at) : "Recent",
+        postedAt: j.updated_at ? new Date(j.updated_at).toISOString() : null,
         salary: extractSalary(rawText),
         scrapedAt: new Date().toISOString(),
         rawText,
@@ -532,6 +536,7 @@ async function fetchLever(token, errors) {
         applyUrl: j.hostedUrl,
         platform: "Lever",
         posted: j.createdAt ? formatDate(new Date(j.createdAt).toISOString()) : "Recent",
+        postedAt: j.createdAt ? new Date(j.createdAt).toISOString() : null,
         salary: extractSalary(rawText),
         scrapedAt: new Date().toISOString(),
         rawText,
@@ -551,7 +556,7 @@ async function fetchAshby(token, errors) {
     const data = await res.json();
     return (data.jobs || []).map((j) => {
       const title = decodeHtml(j.title || "").trim();
-      if (!ATS_TITLE_FILTER.test(title)) return null;
+      if (!ATS_TITLE_FILTER.test(title) || WRONG_FUNCTION.test(title)) return null;
       const location = j.location || "";
       const rawText = cleanRawText(decodeHtml(j.descriptionPlain || ""));
       return {
@@ -563,6 +568,7 @@ async function fetchAshby(token, errors) {
         applyUrl: j.jobUrl || j.applyUrl,
         platform: "Ashby",
         posted: j.publishedAt ? formatDate(j.publishedAt) : "Recent",
+        postedAt: j.publishedAt ? new Date(j.publishedAt).toISOString() : null,
         salary: j.compensation?.summary || extractSalary(rawText),
         scrapedAt: new Date().toISOString(),
         rawText,
@@ -749,6 +755,119 @@ function capPerCompany(jobs, max) {
   return out;
 }
 
+
+
+// ============================================================
+// WORKDAY — public JSON API, no key required. Most large
+// broker-dealers recruit here, which is where the home-office
+// roles live. Tenant/shard/site are read off each firm's public
+// careers URL; all eight below were verified, not guessed.
+// ============================================================
+
+const WORKDAY_BOARDS = [
+  { name: "Raymond James",   tenant: "raymondjames",     shard: "wd1", site: "RaymondJamesCareers" },
+  { name: "LPL Financial",   tenant: "lplfinancial",     shard: "wd1", site: "External" },
+  { name: "Ameriprise",      tenant: "ameriprise",       shard: "wd5", site: "Ameriprise" },
+  { name: "Blue Owl",        tenant: "blueowl",          shard: "wd1", site: "blueowl" },
+  { name: "Orion Advisor",   tenant: "orionadvisor",     shard: "wd1", site: "Orion_Careers" },
+  { name: "Wells Fargo",     tenant: "wf",               shard: "wd1", site: "WellsFargoJobs" },
+  { name: "Fidelity",        tenant: "fmr",              shard: "wd1", site: "FidelityCareers" },
+  { name: "Wealth Enhancement", tenant: "wealthenhancement", shard: "wd1", site: "WEG_Careers" },
+];
+
+const WORKDAY_TERMS = ["wealth", "advisor"];
+
+// Workday returns a localized display string, not a date: "Posted Today",
+// "Posted 3 Days Ago", "Posted 30+ Days Ago". Convert to an approximate
+// ISO date so the same age filter applies here as everywhere else.
+function workdayPostedToISO(postedOn) {
+  if (!postedOn) return null;
+  const s = String(postedOn).toLowerCase();
+  let daysAgo = null;
+  if (s.includes("today") || s.includes("just posted")) daysAgo = 0;
+  else if (s.includes("yesterday")) daysAgo = 1;
+  else if (/(\d+)\+\s*days?/.test(s)) daysAgo = parseInt(s.match(/(\d+)\+\s*days?/)[1], 10) + 1;
+  else if (/(\d+)\s*days?/.test(s)) daysAgo = parseInt(s.match(/(\d+)\s*days?/)[1], 10);
+  else if (/(\d+)\s*months?/.test(s)) daysAgo = parseInt(s.match(/(\d+)\s*months?/)[1], 10) * 30;
+  if (daysAgo === null) return null;
+  return new Date(Date.now() - daysAgo * 86400000).toISOString();
+}
+
+async function fetchWorkday(board, searchText, errors, delayMs = 0) {
+  if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
+  const base = `https://${board.tenant}.${board.shard}.myworkdayjobs.com`;
+  const url = `${base}/wday/cxs/${board.tenant}/${board.site}/jobs`;
+  try {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+        "Accept-Language": "en-US",
+      },
+      // limit above 20 silently returns zero rows with a 200.
+      body: JSON.stringify({ appliedFacets: {}, limit: 20, offset: 0, searchText }),
+    });
+    if (!res.ok) { errors.push(`workday:${board.tenant} "${searchText}" HTTP ${res.status}`); return []; }
+    const data = await res.json();
+    const posts = data.jobPostings || [];
+    if (!posts.length) return [];
+    return posts.map((p) => {
+      const title = decodeHtml(p.title || "").trim();
+      if (!ATS_TITLE_FILTER.test(title) || WRONG_FUNCTION.test(title)) return null;
+      const location = p.locationsText || "";
+      const bullets = Array.isArray(p.bulletFields) ? p.bulletFields.join(" ") : "";
+      return {
+        id: makeJobId(board.tenant, title, location),
+        title,
+        company: board.name,
+        location,
+        summary: "",
+        rawText: `${title} ${bullets}`,
+        applyUrl: p.externalPath ? `${base}/en-US/${board.site}${p.externalPath}` : base,
+        platform: "Workday",
+        posted: p.postedOn || "Recent",
+        postedAt: workdayPostedToISO(p.postedOn),
+        salary: "",
+        scrapedAt: new Date().toISOString(),
+      };
+    }).filter(Boolean);
+  } catch (e) {
+    errors.push(`workday:${board.tenant} "${searchText}" ${e.message}`);
+    return [];
+  }
+}
+
+// === AGE FILTERING ===
+// Adzuna caps itself at 30 days, but the ATS boards return everything they
+// have — which is how 41-day-old Addepar engineering roles reached the board.
+// This applies one age rule to every source.
+const MAX_AGE_DAYS = 30;
+const NEW_WINDOW_DAYS = 7;
+
+function ageInDays(job) {
+  if (!job.postedAt) return null;           // unknown age — never dropped
+  const ms = Date.now() - new Date(job.postedAt).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  return ms / 86400000;
+}
+
+// One hour of slack so a posting dated exactly 7 or 30 days ago isn't
+// excluded by millisecond drift between the source's clock and ours.
+const EPS_DAYS = 1 / 24;
+
+function isWithinMaxAge(job) {
+  const age = ageInDays(job);
+  return age === null || age <= MAX_AGE_DAYS + EPS_DAYS;
+}
+
+function markFreshness(job) {
+  const age = ageInDays(job);
+  job.ageDays = age === null ? null : Math.floor(age);
+  job.isNew = age !== null && age <= NEW_WINDOW_DAYS + EPS_DAYS;
+  return job;
+}
+
 // === NEAR-DUPLICATE COLLAPSE ===
 // Big banks post the same role once per branch. Normalizing company and title
 // so "Private Client Advisor - Manhattan (Upper Eastside)" and
@@ -807,16 +926,24 @@ export const handler = async () => {
     ...WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 80, 2)),
   ];
   const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 80));
+  // Workday: one call per firm per search term, staggered so eight firms
+  // aren't hit simultaneously.
+  let wdSlot = 0;
+  const workday = WORKDAY_BOARDS.flatMap((b) =>
+    WORKDAY_TERMS.map((term) => fetchWorkday(b, term, errors, wdSlot++ * 60))
+  );
+
   const ats = [
     ...GREENHOUSE_BOARDS.map((t) => fetchGreenhouse(t, errors)),
     ...LEVER_BOARDS.map((t) => fetchLever(t, errors)),
     ...ASHBY_BOARDS.map((t) => fetchAshby(t, errors)),
   ];
 
-  const [wmSettled, expSettled, atsSettled] = await Promise.all([
+  const [wmSettled, expSettled, atsSettled, wdSettled] = await Promise.all([
     Promise.allSettled(adzunaWM),
     Promise.allSettled(adzunaExp),
     Promise.allSettled(ats),
+    Promise.allSettled(workday),
   ]);
 
   const flat = (settled, label) =>
@@ -829,8 +956,13 @@ export const handler = async () => {
   // Route each ATS job to exactly one lane: WM if it hits real wealth-management
   // keywords, otherwise the expanded lane. Without this the WM lane swallows
   // every ATS listing and the expanded lane comes back empty.
+  // Workday firms were hand-picked as wealth employers, and their listings
+  // carry no description text, so the keyword gate below would always route
+  // them to Expanded and then drop them. They belong in the Wealth lane.
+  const workdayJobs = flat(wdSettled, "workday");
+
   const atsJobs = flat(atsSettled, "ats");
-  const atsWM = [];
+  const atsWM = [...workdayJobs];
   const atsExp = [];
   for (const j of atsJobs) {
     const t = `${j.title} ${j.summary || j.rawText || ""}`.toLowerCase();
@@ -845,6 +977,7 @@ export const handler = async () => {
     (j) => !isCompanyBlocked(j.company)
       && isLocationValid(j.location, "wm")
       && !isBecomeAdvisorTrack(j)
+      && isWithinMaxAge(j)
   );
   const wmUnique = mergeListings(wmFiltered);
   for (const j of wmUnique) {
@@ -864,6 +997,7 @@ export const handler = async () => {
       !isCompanyBlocked(j.company) &&
       isLocationValid(j.location, "expanded") &&
       !wmIds.has(j.id)
+      && isWithinMaxAge(j)
   );
   const expUnique = mergeListings(expFiltered);
   const expScored = [];
@@ -908,8 +1042,13 @@ export const handler = async () => {
   };
   let wmFinal = keep(wmCollapsed).filter((j) => !isBecomeAdvisorTrack(j));
   let expFinal = keep(expCollapsed);
-  wmFinal.sort((a, b) => b.matchScore - a.matchScore);
-  expFinal.sort((a, b) => b.matchScore - a.matchScore);
+  wmFinal.forEach(markFreshness);
+  expFinal.forEach(markFreshness);
+  // Sort by score, but give anything posted this week a boost so new
+  // listings surface instead of being buried under older high scorers.
+  const rank = (j) => j.matchScore + (j.isNew ? 8 : 0);
+  wmFinal.sort((a, b) => rank(b) - rank(a));
+  expFinal.sort((a, b) => rank(b) - rank(a));
   // Max 3 roles per employer, then the best 25 overall.
   wmFinal = capPerCompany(wmFinal, 3).slice(0, 25);
   expFinal = capPerCompany(expFinal, 3).slice(0, 15);
@@ -932,12 +1071,14 @@ export const handler = async () => {
       counts: {
         wm: {
           total: wmFinal.length,
+          thisWeek: wmFinal.filter((j) => j.isNew).length,
           high: wmFinal.filter((j) => j.fit === "HIGH").length,
           med: wmFinal.filter((j) => j.fit === "MED").length,
           low: wmFinal.filter((j) => j.fit === "LOW").length,
         },
         expanded: {
           total: expFinal.length,
+          thisWeek: expFinal.filter((j) => j.isNew).length,
           high: expFinal.filter((j) => j.fit === "HIGH").length,
           med: expFinal.filter((j) => j.fit === "MED").length,
         },
