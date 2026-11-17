@@ -17,6 +17,12 @@ const WM_SEARCHES = [
   { query: "financial planning specialist", location: "Remote" },
   { query: "advisor technology wealth management", location: "Remote" },
   { query: "wealth management analyst series 7", location: "New York, NY" },
+  // Firm-targeted: Workday blocks our server, but Adzuna indexes those
+  // same postings, so we reach them by name instead.
+  { query: "Raymond James wealth management", location: "New York, NY" },
+  { query: "LPL Financial advisor", location: "New York, NY" },
+  { query: "Ameriprise wealth management", location: "New York, NY" },
+  { query: "Fidelity wealth management", location: "New York, NY" },
 ];
 
 // === EXPANDED LANE searches ===
@@ -469,17 +475,36 @@ function mergeListings(allJobs) {
 
 // VERIFIED WORKING as of last run. To add a company, open
 // boards.greenhouse.io/<token> in a browser first — if it loads, the token is good.
+// Wealth-industry boards only. Carta, Brex, Chime and Affirm were removed —
+// they are fintech, employ no advisors, and were the source of the account
+// executive noise in the Expanded tab. All tokens below were verified.
 const GREENHOUSE_BOARDS = [
-  "carta", "betterment", "brex", "chime", "affirm",
-  "addepar1",  // verified — note the trailing 1, plain "addepar" 404s
-  "altruist",  // verified — Greenhouse, not Lever
+  "merceradvisors",        // large national RIA
+  "fartherfinance",        // RIA / wealthtech
+  "focusfinancialpartners",// RIA aggregator
+  "monecoadvisors",        // RIA
+  "pontera",               // wealthtech
+  "viseai",                // wealthtech
+  "robinhood",             // brokerage, advisor marketplace
+  "betterment",
+  "altruist",
+  "addepar1",
 ];
 
 // All three previous tokens 404'd. Verify at jobs.lever.co/<token> before adding.
-const LEVER_BOARDS = [];
+const LEVER_BOARDS = [
+  "brightonjones",  // RIA
+  "zocks",          // advisor tooling / practice management
+  "Aprio",          // wealth advisory
+];
 
 // Verify at jobs.ashbyhq.com/<token> before adding.
-const ASHBY_BOARDS = ["savvy"];
+const ASHBY_BOARDS = [
+  "savvy",
+  "range",       // wealthtech RIA
+  "arca",        // wealth advisory
+  "nerdwallet",  // advisory arm
+];
 
 const WRONG_FUNCTION = /\b(software|engineer|engineering|developer|devops|architect|data scien\w*|machine learning|security|network|qa |sdet|nurse|therapist|counselor|clinical|behavioral health|physician|attorney|paralegal|janitor|custodian|teller|intern|auditor|audit)\b/i;
 
@@ -886,7 +911,11 @@ export const handler = async (event) => {
 
   const flat = (settled, label) =>
     settled.flatMap((r, i) => {
-      if (r.status === "fulfilled") return r.value;
+      // Defensive: a source returning anything but an array of jobs must not
+      // be able to crash the whole board.
+      if (r.status === "fulfilled") {
+        return Array.isArray(r.value) ? r.value.filter(Boolean) : [];
+      }
       errors.push(`${label}[${i}]: ${r.reason?.message || "failed"}`);
       return [];
     });
