@@ -5,16 +5,18 @@
 // === WM LANE searches ===
 // Mix of home-office phrasing and standard WM titles. Narrow queries alone
 // returned almost nothing — postings rarely use internal jargon.
+// Adzuna's free tier allows 25 calls/minute and 250/day. The previous 26
+// calls per refresh breached the per-minute limit on a single load and
+// exhausted the daily quota in nine refreshes. Eight queries, one page each.
 const WM_SEARCHES = [
   { query: "wealth management associate", location: "New York, NY" },
-  { query: "financial planning associate", location: "New York, NY" },
   { query: "wealth management practice management", location: "New York, NY" },
   { query: "advisor development wealth management", location: "New York, NY" },
   { query: "wealth management platform product", location: "New York, NY" },
   { query: "financial planning consultant", location: "New York, NY" },
-  { query: "wealth management analyst series 7", location: "New York, NY" },
   { query: "financial planning specialist", location: "Remote" },
   { query: "advisor technology wealth management", location: "Remote" },
+  { query: "wealth management analyst series 7", location: "New York, NY" },
 ];
 
 // === EXPANDED LANE searches ===
@@ -23,12 +25,9 @@ const WM_SEARCHES = [
 // with no connection to Matt's background (Google Chief of Staff, Brex
 // enterprise sales, fraud ops). Removed for speed and signal.
 const EXPANDED_SEARCHES = [
-  { query: "investor relations associate", location: "New York, NY" },
-  { query: "compliance analyst finance", location: "New York, NY" },
+  { query: "client solutions wealth management", location: "New York, NY" },
   { query: "customer success fintech", location: "New York, NY" },
   { query: "implementation manager wealth", location: "New York, NY" },
-  { query: "client solutions wealth management", location: "New York, NY" },
-  { query: "equity compensation stock plan", location: "New York, NY" },
   { query: "customer success wealth management", location: "Remote" },
 ];
 
@@ -401,8 +400,9 @@ async function fetchAdzuna(query, location, errors = [], delayMs = 0, page = 1) 
   const url = `https://api.adzuna.com/v1/api/jobs/us/search/${page}?app_id=${appId}&app_key=${appKey}&results_per_page=50&what=${encodeURIComponent(query)}&where=${encodeURIComponent(cleanLocation)}&max_days_old=30&sort_by=date`;
   try {
     let res = await fetch(url, { headers: { "Accept": "application/json" } });
-    if (res.status === 429) {
-      // Rate limited — back off once and try again before giving up.
+    if (res.status === 429 || res.status === 503) {
+      // 429 is per-minute throttling; 503 is what Adzuna returns at its
+      // daily quota. Back off once either way.
       await new Promise((r) => setTimeout(r, 700));
       res = await fetch(url, { headers: { "Accept": "application/json" } });
     }
@@ -758,103 +758,14 @@ function capPerCompany(jobs, max) {
 
 
 
-// ============================================================
-// WORKDAY — public JSON API, no key required. Most large
-// broker-dealers recruit here, which is where the home-office
-// roles live. Tenant/shard/site are read off each firm's public
-// careers URL; all eight below were verified, not guessed.
-// ============================================================
-
-const WORKDAY_BOARDS = [
-  { name: "Raymond James",   tenant: "raymondjames",     shard: "wd1", site: "RaymondJamesCareers" },
-  { name: "LPL Financial",   tenant: "lplfinancial",     shard: "wd1", site: "External" },
-  { name: "Ameriprise",      tenant: "ameriprise",       shard: "wd5", site: "Ameriprise" },
-  { name: "Blue Owl",        tenant: "blueowl",          shard: "wd1", site: "blueowl" },
-  { name: "Orion Advisor",   tenant: "orionadvisor",     shard: "wd1", site: "Orion_Careers" },
-  { name: "Wells Fargo",     tenant: "wf",               shard: "wd1", site: "WellsFargoJobs" },
-  { name: "Fidelity",        tenant: "fmr",              shard: "wd1", site: "FidelityCareers" },
-  { name: "Wealth Enhancement", tenant: "wealthenhancement", shard: "wd1", site: "WEG_Careers" },
-];
-
-// One term per firm. Two terms meant 16 near-simultaneous requests, and six
-// of the eight firms share the wd1 host, which returned 429 across the board.
-const WORKDAY_TERMS = ["wealth"];
-
-// Workday returns a localized display string, not a date: "Posted Today",
-// "Posted 3 Days Ago", "Posted 30+ Days Ago". Convert to an approximate
-// ISO date so the same age filter applies here as everywhere else.
-function workdayPostedToISO(postedOn) {
-  if (!postedOn) return null;
-  const s = String(postedOn).toLowerCase();
-  let daysAgo = null;
-  if (s.includes("today") || s.includes("just posted")) daysAgo = 0;
-  else if (s.includes("yesterday")) daysAgo = 1;
-  else if (/(\d+)\+\s*days?/.test(s)) daysAgo = parseInt(s.match(/(\d+)\+\s*days?/)[1], 10) + 1;
-  else if (/(\d+)\s*days?/.test(s)) daysAgo = parseInt(s.match(/(\d+)\s*days?/)[1], 10);
-  else if (/(\d+)\s*months?/.test(s)) daysAgo = parseInt(s.match(/(\d+)\s*months?/)[1], 10) * 30;
-  if (daysAgo === null) return null;
-  return new Date(Date.now() - daysAgo * 86400000).toISOString();
-}
-
-async function fetchWorkday(board, searchText, errors, delayMs = 0) {
-  if (delayMs) await new Promise((r) => setTimeout(r, delayMs));
-  const base = `https://${board.tenant}.${board.shard}.myworkdayjobs.com`;
-  const url = `${base}/wday/cxs/${board.tenant}/${board.site}/jobs`;
-  try {
-    let res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Accept": "application/json",
-        "Accept-Language": "en-US",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36",
-      },
-      // limit above 20 silently returns zero rows with a 200.
-      body: JSON.stringify({ appliedFacets: {}, limit: 20, offset: 0, searchText }),
-    });
-    if (res.status === 429) {
-      // Throttled. Wait meaningfully longer than a normal stagger, then retry once.
-      await new Promise((r) => setTimeout(r, 1200 + Math.random() * 600));
-      res = await fetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Accept": "application/json",
-          "Accept-Language": "en-US",
-          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36",
-        },
-        body: JSON.stringify({ appliedFacets: {}, limit: 20, offset: 0, searchText }),
-      });
-    }
-    if (!res.ok) { errors.push(`workday:${board.tenant} "${searchText}" HTTP ${res.status}`); return []; }
-    const data = await res.json();
-    const posts = data.jobPostings || [];
-    if (!posts.length) return [];
-    return posts.map((p) => {
-      const title = decodeHtml(p.title || "").trim();
-      if (!ATS_TITLE_FILTER.test(title) || WRONG_FUNCTION.test(title)) return null;
-      const location = p.locationsText || "";
-      const bullets = Array.isArray(p.bulletFields) ? p.bulletFields.join(" ") : "";
-      return {
-        id: makeJobId(board.tenant, title, location),
-        title,
-        company: board.name,
-        location,
-        summary: "",
-        rawText: `${title} ${bullets}`,
-        applyUrl: p.externalPath ? `${base}/en-US/${board.site}${p.externalPath}` : base,
-        platform: "Workday",
-        posted: p.postedOn || "Recent",
-        postedAt: workdayPostedToISO(p.postedOn),
-        salary: "",
-        scrapedAt: new Date().toISOString(),
-      };
-    }).filter(Boolean);
-  } catch (e) {
-    errors.push(`workday:${board.tenant} "${searchText}" ${e.message}`);
-    return [];
-  }
-}
+// === RESPONSE CACHE ===
+// Netlify keeps a function container warm between invocations, so this
+// survives repeated page loads. Refreshing five times in ten minutes used to
+// cost 130 Adzuna calls against a 250/day quota; it now costs 12.
+// A cold start just refetches, which is correct rather than harmful.
+const CACHE_TTL_MS = 20 * 60 * 1000;
+let cachedPayload = null;
+let cachedAt = 0;
 
 // === AGE FILTERING ===
 // Adzuna caps itself at 30 days, but the ATS boards return everything they
@@ -931,37 +842,46 @@ function collapseDuplicates(jobs) {
 // MAIN — plain HTTP handler. All I/O parallel. Time-budgeted.
 // ============================================================
 
-export const handler = async () => {
+export const handler = async (event) => {
   const started = Date.now();
-  const AI_DEADLINE = started + 5000; // leave ~5s for scoring inside a 10s function
+
+  // ?fresh=1 forces a refetch past the cache.
+  const forceFresh = !!(event && event.queryStringParameters && event.queryStringParameters.fresh);
+  const cacheAge = Date.now() - cachedAt;
+  if (!forceFresh && cachedPayload && cacheAge < CACHE_TTL_MS) {
+    return {
+      statusCode: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+        "Access-Control-Allow-Origin": "*",
+      },
+      body: JSON.stringify({
+        ...cachedPayload,
+        servedFromCache: true,
+        cacheAgeSeconds: Math.round(cacheAge / 1000),
+      }),
+    };
+  }
+
+  const AI_DEADLINE = started + 7000; // leave ~5s for scoring inside a 10s function
   const errors = [];
 
   // Adzuna's free tier rejects bursts. Space every query 300ms apart across
   // both lanes rather than firing all of them simultaneously.
   let slot = 0;
-  const adzunaWM = [
-    ...WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 80, 1)),
-    ...WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 80, 2)),
-  ];
-  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 80));
-  // Workday: one call per firm per search term, staggered so eight firms
-  // aren't hit simultaneously.
-  let wdSlot = 0;
-  const workday = WORKDAY_BOARDS.flatMap((b) =>
-    WORKDAY_TERMS.map((term) => fetchWorkday(b, term, errors, wdSlot++ * 450))
-  );
-
+  const adzunaWM = WM_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 250, 1));
+  const adzunaExp = EXPANDED_SEARCHES.map((s) => fetchAdzuna(s.query, s.location, errors, slot++ * 250));
   const ats = [
     ...GREENHOUSE_BOARDS.map((t) => fetchGreenhouse(t, errors)),
     ...LEVER_BOARDS.map((t) => fetchLever(t, errors)),
     ...ASHBY_BOARDS.map((t) => fetchAshby(t, errors)),
   ];
 
-  const [wmSettled, expSettled, atsSettled, wdSettled] = await Promise.all([
+  const [wmSettled, expSettled, atsSettled] = await Promise.all([
     Promise.allSettled(adzunaWM),
     Promise.allSettled(adzunaExp),
     Promise.allSettled(ats),
-    Promise.allSettled(workday),
   ]);
 
   const flat = (settled, label) =>
@@ -977,10 +897,8 @@ export const handler = async () => {
   // Workday firms were hand-picked as wealth employers, and their listings
   // carry no description text, so the keyword gate below would always route
   // them to Expanded and then drop them. They belong in the Wealth lane.
-  const workdayJobs = flat(wdSettled, "workday");
-
   const atsJobs = flat(atsSettled, "ats");
-  const atsWM = [...workdayJobs];
+  const atsWM = [];
   const atsExp = [];
   for (const j of atsJobs) {
     const t = `${j.title} ${j.summary || j.rawText || ""}`.toLowerCase();
@@ -1078,14 +996,7 @@ export const handler = async () => {
   expFinal = capPerCompany(expFinal, 3).slice(0, 15);
   for (const j of [...wmFinal, ...expFinal]) delete j.rawText;
 
-  return {
-    statusCode: 200,
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
-      "Access-Control-Allow-Origin": "*",
-    },
-    body: JSON.stringify({
+  const payload = {
       wm: wmFinal,
       expanded: expFinal,
       lastUpdated: new Date().toISOString(),
@@ -1107,6 +1018,22 @@ export const handler = async () => {
           med: expFinal.filter((j) => j.fit === "MED").length,
         },
       },
-    }),
+  };
+
+  // Only cache a result that worked. Caching a degraded board would lock
+  // the bad version in for twenty minutes.
+  if (payload.wm.length + payload.expanded.length > 0 && payload.aiScored) {
+    cachedPayload = payload;
+    cachedAt = Date.now();
+  }
+
+  return {
+    statusCode: 200,
+    headers: {
+      "Content-Type": "application/json",
+      "Cache-Control": "no-store",
+      "Access-Control-Allow-Origin": "*",
+    },
+    body: JSON.stringify({ ...payload, servedFromCache: false }),
   };
 };
