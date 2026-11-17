@@ -408,7 +408,8 @@ async function fetchAdzuna(query, location, errors = [], delayMs = 0, page = 1) 
     }
     if (!res.ok) { errors.push(`adzuna "${query}" HTTP ${res.status}`); return []; }
     const data = await res.json();
-    return (data.results || []).map(parseAdzunaJob).filter(Boolean);
+    return (data.results || []).map(parseAdzunaJob)
+      .filter((j) => j && !WRONG_FUNCTION.test(j.title));
   } catch (e) { errors.push(`adzuna "${query}" ${e.message}`); return []; }
 }
 
@@ -480,7 +481,7 @@ const LEVER_BOARDS = [];
 // Verify at jobs.ashbyhq.com/<token> before adding.
 const ASHBY_BOARDS = ["savvy"];
 
-const WRONG_FUNCTION = /\b(software|engineer|engineering|developer|devops|architect|data scientist|security|network|qa |sdet|nurse|attorney|paralegal|janitor|teller|intern)\b/i;
+const WRONG_FUNCTION = /\b(software|engineer|engineering|developer|devops|architect|data scien\w*|machine learning|security|network|qa |sdet|nurse|therapist|counselor|clinical|behavioral health|physician|attorney|paralegal|janitor|custodian|teller|intern|auditor|audit)\b/i;
 
 const ATS_TITLE_FILTER = /\b(wealth|advisor|adviser|planning|planner|client|customer success|account executive|account manager|implementation|onboarding|solutions|relationship manager|partnerships|equity comp|stock plan|business development|operations associate|chief of staff)\b/i;
 
@@ -775,7 +776,9 @@ const WORKDAY_BOARDS = [
   { name: "Wealth Enhancement", tenant: "wealthenhancement", shard: "wd1", site: "WEG_Careers" },
 ];
 
-const WORKDAY_TERMS = ["wealth", "advisor"];
+// One term per firm. Two terms meant 16 near-simultaneous requests, and six
+// of the eight firms share the wd1 host, which returned 429 across the board.
+const WORKDAY_TERMS = ["wealth"];
 
 // Workday returns a localized display string, not a date: "Posted Today",
 // "Posted 3 Days Ago", "Posted 30+ Days Ago". Convert to an approximate
@@ -798,16 +801,31 @@ async function fetchWorkday(board, searchText, errors, delayMs = 0) {
   const base = `https://${board.tenant}.${board.shard}.myworkdayjobs.com`;
   const url = `${base}/wday/cxs/${board.tenant}/${board.site}/jobs`;
   try {
-    const res = await fetch(url, {
+    let res = await fetch(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "Accept": "application/json",
         "Accept-Language": "en-US",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36",
       },
       // limit above 20 silently returns zero rows with a 200.
       body: JSON.stringify({ appliedFacets: {}, limit: 20, offset: 0, searchText }),
     });
+    if (res.status === 429) {
+      // Throttled. Wait meaningfully longer than a normal stagger, then retry once.
+      await new Promise((r) => setTimeout(r, 1200 + Math.random() * 600));
+      res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Accept": "application/json",
+          "Accept-Language": "en-US",
+          "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36",
+        },
+        body: JSON.stringify({ appliedFacets: {}, limit: 20, offset: 0, searchText }),
+      });
+    }
     if (!res.ok) { errors.push(`workday:${board.tenant} "${searchText}" HTTP ${res.status}`); return []; }
     const data = await res.json();
     const posts = data.jobPostings || [];
@@ -930,7 +948,7 @@ export const handler = async () => {
   // aren't hit simultaneously.
   let wdSlot = 0;
   const workday = WORKDAY_BOARDS.flatMap((b) =>
-    WORKDAY_TERMS.map((term) => fetchWorkday(b, term, errors, wdSlot++ * 60))
+    WORKDAY_TERMS.map((term) => fetchWorkday(b, term, errors, wdSlot++ * 450))
   );
 
   const ats = [
@@ -1036,9 +1054,15 @@ export const handler = async () => {
   // Previously anything without an AI score bypassed this filter entirely,
   // which is how a reinsurance SVP role at 29 stayed in the wealth lane.
   const MIN_SCORE = 30;
+  // A keyword-only job with no matched terms always lands on exactly 30 and
+  // reads "No strong matches" — that's the Johns Hopkins / Mount Sinai tier.
+  // Drop those, but never drop a job merely because the AI batch skipped it:
+  // the model sometimes returns fewer rows than it was sent, and deleting
+  // those would silently lose good listings.
+  const isUnmatchedNoise = (j) => !j.aiScored && j.matchScore <= 30;
   const keep = (arr) => {
-    const filtered = arr.filter((j) => j.matchScore >= MIN_SCORE);
-    return filtered.length ? filtered : arr.slice(0, 5);
+    const filtered = arr.filter((j) => j.matchScore >= MIN_SCORE && !isUnmatchedNoise(j));
+    return filtered.length ? filtered : arr.filter((j) => j.matchScore >= MIN_SCORE).slice(0, 5);
   };
   let wmFinal = keep(wmCollapsed).filter((j) => !isBecomeAdvisorTrack(j));
   let expFinal = keep(expCollapsed);
