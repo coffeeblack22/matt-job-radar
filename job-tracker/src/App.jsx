@@ -1013,9 +1013,13 @@ export default function App() {
       });
   }, [laneJobs, applied, interested, hidden, viewed, prefs, categoryFilter]);
 
-  const fitFiltered = filter === "ALL" ? activeFeed : activeFeed.filter(j => j.fit === filter);
+  const fitFiltered =
+    filter === "ALL" ? activeFeed
+    : filter === "NEW" ? activeFeed.filter(j => j.isNew)
+    : activeFeed.filter(j => j.fit === filter);
 
   const counts = {
+    NEW: activeFeed.filter(j => j.isNew).length,
     HIGH: activeFeed.filter(j => j.fit === "HIGH").length,
     MED: activeFeed.filter(j => j.fit === "MED").length,
     LOW: activeFeed.filter(j => j.fit === "LOW").length,
@@ -1156,7 +1160,7 @@ export default function App() {
 
             {laneJobs.length > 0 && (
               <div className="chip-row">
-                {[["ALL", activeFeed.length], ["HIGH", counts.HIGH], ["MED", counts.MED], ["LOW", counts.LOW]].map(([f, n]) => (
+                {[["ALL", activeFeed.length], ["NEW", counts.NEW], ["HIGH", counts.HIGH], ["MED", counts.MED], ["LOW", counts.LOW]].map(([f, n]) => (
                   <button key={f} className={`chip ${f.toLowerCase()} ${filter === f ? "active" : ""}`}
                     onClick={() => setFilter(f)}>{f} {n}</button>
                 ))}
